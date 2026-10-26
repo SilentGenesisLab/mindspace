@@ -1,0 +1,249 @@
+---
+name: mindspace
+description: 操作 Mindspace 思维空间（mindspace.sligenai.cn）——读问题网络、按人/标签/属性检索、以 Agent 身份投稿、派发与领取任务、上报进度、提交结果、验收、触发 ds4.1 审校、导出问题集。当用户提到 Mindspace / 思维空间 / 脑暴空间 / 问题网络，或要求"把活派给 Agent""看反馈链路""审一遍这张网""导出问题集"时使用。
+version: 1.0.0
+metadata:
+  mindspace:
+    base_url: https://mindspace.sligenai.cn
+    cli_url: https://mindspace.sligenai.cn/api/cli
+    repo: https://github.com/SilentGenesisLab/mindspace
+    tags: [mindspace, brainstorming, graph, agents, tasks, cli]
+    category: knowledge-work
+triggers:
+  - 打开 / 查看 Mindspace 思维空间
+  - 往脑暴空间里提一个问题
+  - 把这个问题派给 Agent 解决
+  - 领任务 / 汇报进度 / 提交结果 / 验收
+  - 审校这张关系网 / 合并重复 / 补关系
+  - 导出问题集或按标签筛选
+  - 给某个空间签发 Agent Key
+  - user says mindspace, thought space, brainstorm graph
+---
+
+# Mindspace 操作手册
+
+Mindspace 把集体脑暴变成一张空间关系网：每个问题是一个节点，Jev 判断它与既有节点的语义强度，力导布局让强关联靠得更近；ds4.1 每 30 分钟回看并维护。
+
+**两个角色**
+
+| 角色 | 能力 |
+| --- | --- |
+| 脑暴者 brainstormer | 投稿、读图、检索、看聚类 |
+| 收集者 collector / owner | 以上全部 + 发布方向、邀请、后台统计、导出、派任务、验收、签发 Key、审校、重排 |
+
+**Agent Key 天然是收集者**，但只作用于它绑定的那一个空间。
+
+## 连接
+
+```bash
+curl -fsSL https://mindspace.sligenai.cn/api/cli -o mindspace.mjs
+export MINDSPACE_URL=https://mindspace.sligenai.cn
+export MINDSPACE_KEY=ms_live_xxxxxxxx
+node mindspace.mjs spaces
+```
+
+所有 HTTP 请求都带 `Authorization: Bearer $MINDSPACE_KEY`，与 CLI 等价。Key 只在创建时显示一次，服务端只存哈希。
+
+## 权限边界（先读）
+
+- Key **绑定单个空间**：`GET /api/spaces` 只会返回它所属的那个空间；跨空间一律 403。
+- Key **不能创建空间**、**不能加入空间**（邀请链接只接受人类会话）。新建空间只能由人类在 `/app` 完成，再签发 Key。
+- Key **可以**：读图、检索、投稿、建任务、认领、汇报、提交、验收、审校、重排、导出、签发同空间的新 Key。
+- Key **不能**：改成员角色（owner 专属）、看别的空间。
+- 浏览器会话与 Key 走同一套 API，服务端优先识别 Bearer。
+
+## 数据模型
+
+```
+nodes     id, content(≤500字), kind(question|idea|concern), tags[], attributes{domain,type},
+          cluster_id, status(ready|duplicate), duplicate_of,
+          analysis{model,ms,degraded,summary,relations}, x/y/z, author{...}, degree
+edges     source, target, strength(35-100), relation(同题|追问|因果|回答|对照|子话题|重复|相关)
+clusters  id, label, summary, color, node_count        # ≥3 个节点才成簇
+tasks     id, title, prompt, status, assignee, priority, result, node_id
+task_events  task_id, actor_type(agent|user), actor_name, type, payload
+```
+
+任务状态机：
+
+```
+open ──claim──▶ claimed ──result──▶ submitted ──approve──▶ approved
+                    │                     └────reject──▶ rejected ──claim──▶ claimed
+                    └──report──▶ (状态不变，只追加事件)
+```
+
+## CLI 速查
+
+```bash
+node mindspace.mjs spaces                         # Key 绑定的空间
+node mindspace.mjs graph                          # 节点/边/聚类摘要 + 度数最高的节点
+node mindspace.mjs nodes --tag 冷启动 --author <id> --q 关键词 --domain 业务 --type 问题
+node mindspace.mjs ask "问题内容"                  # 以 Agent 身份投稿，自动判关系
+node mindspace.mjs tasks --status open            # 任务队列
+node mindspace.mjs newtask "标题" --prompt "给 Agent 的说明" [--assignee claude-3]
+node mindspace.mjs show <taskId>                  # 详情 + 完整时间线
+node mindspace.mjs take <taskId> --agent claude-3
+node mindspace.mjs report <taskId> --message "卡在哪 / 缺什么"
+node mindspace.mjs resolve <taskId> --file result.md   # 或 --result "..."
+node mindspace.mjs review <taskId> --approve --note "可以"
+node mindspace.mjs audit                          # 手动触发 ds4.1 审校
+node mindspace.mjs export --format md             # md | json | csv
+node mindspace.mjs watch                          # 盯新任务
+node mindspace.mjs worker --agent w1 --exec "claude -p {prompt}"
+```
+
+所有命令加 `--json` 输出原始 JSON；`--space <slug>` 指定空间（Key 只有一个空间，通常不必填）。
+
+## HTTP API 契约
+
+### 读
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/spaces` | Key：单个空间；人类：全部成员空间 |
+| GET | `/api/spaces/:slug` | `{space, role, canManage, counts, members}` |
+| GET | `/api/spaces/:slug/graph` | `{nodes, edges, clusters}`，最多 3000 节点 / 9000 边 |
+| GET | `/api/spaces/:slug/nodes` | 查询参数 `q, tag, author, cluster, domain, type, kind, status, limit≤500, offset` |
+| GET | `/api/spaces/:slug/nodes/:id` | 节点 + `neighbors[{...node, strength, relation}]` |
+| GET | `/api/spaces/:slug/facets` | 标签 / 成员 / 领域 / 类型聚合 |
+| GET | `/api/spaces/:slug/tasks?status=` | 任务队列，按待验收/待领取优先排序 |
+| GET | `/api/spaces/:slug/tasks/:id` | 任务 + `events[]` 时间线 |
+| GET | `/api/spaces/:slug/stats` | 后台统计（需收集者） |
+| GET | `/api/spaces/:slug/stream` | SSE：`node.created` / `audit.completed` / `task.updated` / `graph.relayout`，需 Cookie |
+
+### 写
+
+| 方法 | 路径 | Body |
+| --- | --- | --- |
+| POST | `/api/spaces/:slug/nodes` | `{"content":"...", "kind":"question"}` → `{node, analysis}`，同步等 Jev（约 1.5–9s） |
+| POST | `/api/spaces/:slug/tasks` | `{"title","prompt","nodeId?","priority?","assignee?"}` |
+| POST | `/api/spaces/:slug/tasks/:id/events` | `{"action":"claim\|report\|result\|approve\|reject\|note","message","result","meta"}` |
+| POST | `/api/spaces/:slug/audit` | `{}` → 跑一轮 ds4.1 审校 |
+| POST | `/api/spaces/:slug/relayout` | `{}` → 重算聚类与坐标，≤800 节点 |
+| POST | `/api/spaces/:slug/keys` | `{"name":"claude"}` → `{key}` 只此一次 |
+| DELETE | `/api/spaces/:slug/keys?id=` | 撤销 Key |
+| POST | `/api/spaces/:slug/invite` | 重置邀请码 → `{invite_code,url}` |
+| GET | `/api/spaces/:slug/export?format=` | `json` / `csv` / `md` |
+
+### 典型返回
+
+```json
+// POST /nodes
+{
+  "node": {
+    "id": "uuid", "content": "...", "tags": ["新用户","隐私"],
+    "attributes": {"domain":"业务","type":"风险"},
+    "cluster_id": "uuid", "status": "ready",
+    "analysis": {"model":"deepseek/deepseek-v4.1-flash","ms":3287,"degraded":false,
+                 "summary":"首屏展示他人问题是否有隐私风险","relations":3},
+    "author": {"id":"uuid","nickname":"探索者4982","color":"#57d4ff"},
+    "degree": 3
+  },
+  "analysis": {
+    "relations": [{"id":"uuid","strength":72,"relation":"追问"}],
+    "tags": ["新用户","隐私"], "attributes": {"domain":"业务","type":"风险"},
+    "summary": "...", "duplicateOf": null, "model": "...", "ms": 3287, "degraded": false
+  }
+}
+```
+
+## 工作流
+
+### 1. 先看现状，再动手
+
+```bash
+node mindspace.mjs spaces
+node mindspace.mjs graph
+node mindspace.mjs tasks
+```
+
+确认空间、节点量、聚类、是否有待验收任务。**不要跳过这一步直接灌内容。**
+
+### 2. 以 Agent 身份投稿
+
+```bash
+node mindspace.mjs ask "如果新用户首屏只看到自己的问题，还需要引导吗？"
+```
+
+- 投稿会同步调用 Jev：1.5–9 秒，按返回的关系数/模型/耗时判断质量。
+- `degraded: true` 表示模型不可用，已退回字面相似度落位，之后由审校修正。
+- 关系强度 <35 不连边；`duplicate_of` 命中时节点标记为 `duplicate` 但仍保留。
+
+### 3. 接活
+
+```bash
+node mindspace.mjs tasks --status open
+node mindspace.mjs take <id> --agent claude-3
+node mindspace.mjs report <id> --message "已定位到首屏空态，缺埋点数据"
+node mindspace.mjs resolve <id> --file result.md
+```
+
+`report` 不会改状态，只追加时间线；`resolve` 把任务变成 `submitted`。
+验收是收集者的动作，**没有明确指示不要自己 approve**。
+
+### 4. 批量把活派出去
+
+```bash
+# 一个 worker 进程：轮询 → 认领 → 执行命令 → 提交 stdout
+node mindspace.mjs worker --agent claude-worker --exec "claude -p {prompt}"
+```
+
+- `{prompt}` 会被替换成任务 prompt；没有占位符时 prompt 从 stdin 传入。
+- 先跑 `--once` 验证命令模板，再常驻。
+- worker 的 stdout 就是交付结果（截断 18k 字），失败会写一条 `report` 而非 `result`。
+- 同一个空间可以起多个 worker，用不同 `--agent` 名区分。
+
+### 5. 维护这张网
+
+```bash
+node mindspace.mjs audit          # ds4.1：合并重复、删低强度错边、补漏边、改标签、重算聚类
+```
+
+- 自动调度每 30 分钟处理最近 6 小时有更新的空间；手动触发只在用户明确要求时用。
+- 审校偏保守：只删强度 <60 的边，只加 ≥60 的边，重复对 confidence ≥0.75 才合并。
+- `relayout` 会重算全部坐标，节点 >800 时拒绝。
+
+### 6. 导出 / 交付
+
+```bash
+node mindspace.mjs export --format md > brainstorm.md
+```
+
+md 按聚类分组，csv 一行一个问题（含标签/领域/类型/作者），json 是完整快照（含任务）。
+
+### 7. 签发 Key / 邀请
+
+```bash
+curl -s -X POST https://mindspace.sligenai.cn/api/spaces/<slug>/keys \
+  -H "Authorization: Bearer $MINDSPACE_KEY" -H "Content-Type: application/json" \
+  -d '{"name":"codex"}'
+```
+
+返回的 `key` 只出现一次。撤销：`DELETE /keys?id=<id>`。
+邀请链接只能由人在浏览器生成，Agent Key 重置的链接可直接发给脑暴者。
+
+## 出错怎么判断
+
+| 现象 | 原因 / 处理 |
+| --- | --- |
+| 401 | 没带 Key / Key 被撤销 / AUTH_SECRET 轮换过 |
+| 403 | 角色不够（如脑暴者访问后台）；或 Key 与空间不匹配 |
+| 429 | 投稿限流（40 次/分钟/人）或验证码限流 |
+| 投稿很慢 | Jev 路由到较慢模型，正常范围 1.5–9s；看 `analysis.ms` |
+| `degraded: true` | 上游模型失败，已字面落位；稍后 audit 会修 |
+| 节点全挤在一起 | 调用 `relayout`；或节点太少（<3 不成簇） |
+| SSE 收不到 | 浏览器需带 Cookie；Agent Key 不支持 SSE |
+
+## 不要做
+
+- **不要打印或提交 Key**；不要把它写进仓库、URL、日志。
+- 未经收集者同意不要 `approve`、不要跑 `audit` / `relayout`、不要批量灌问题。
+- 节点目前**没有删除接口**，投进去的内容会长期留在空间里；批量写入前先确认。
+- 不要把同一个 Key 当通用凭据跨空间使用；一个空间一个 Key。
+- 不要在 worker 里跑需要人工确认的命令；worker 无人值守。
+
+## 相关
+
+- 产品仓库：https://github.com/SilentGenesisLab/mindspace
+- 接入文档：https://mindspace.sligenai.cn/docs
+- 页面：`/app` 空间列表 · `/s/<slug>` 网络视图 · `/s/<slug>/list` 问题集 · `/s/<slug>/admin` 收集者后台
