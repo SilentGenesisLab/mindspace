@@ -9,24 +9,45 @@ import type { IssueTree } from './types';
 const RUN_MODEL = () => process.env.RUN_MODEL || 'deepseek/deepseek-v4.1-flash';
 const REVIEW_MODEL = () => process.env.REVIEW_MODEL || 'z-ai/glm-5.3-flash';
 
-/** 每个树节点最近一条任务，用于在问题树上显示执行状态。 */
-export async function treeTaskMap(spaceId: string, treeId: string) {
-  const rows = await q<{
-    tree_item_id: string;
-    id: string;
-    status: string;
-    assignee: string | null;
-    executor: string | null;
-    title: string;
-    updated_at: string;
-  }>(
-    `select distinct on (tree_item_id) tree_item_id, id, status, assignee, executor, title, updated_at
-     from tasks
-     where space_id = $1 and tree_id = $2 and tree_item_id is not null
-     order by tree_item_id, created_at desc`,
-    [spaceId, treeId],
+type ItemTaskRow = {
+  id: string;
+  tree_item_id: string | null;
+  node_id: string | null;
+  title: string;
+  status: string;
+  assignee: string | null;
+  executor: string | null;
+  updated_at: string;
+};
+
+function findTaskForItem(item: { nodeId: string | null; question: string }, tasks: ItemTaskRow[]) {
+  return tasks.find(
+    (task) => (item.nodeId && task.node_id === item.nodeId) || task.title === item.question,
   );
-  return Object.fromEntries(rows.map((row) => [row.tree_item_id, row]));
+}
+
+/** 每个树节点最近一条任务。跨树版本按 nodeId / 问题原文匹配，重新收束后状态不丢。 */
+export async function treeTaskMap(spaceId: string, treeId: string) {
+  const treeRow = await one<{ tree: IssueTree }>('select tree from space_trees where space_id = $1 and id = $2', [
+    spaceId,
+    treeId,
+  ]);
+  if (!treeRow) return {};
+
+  const tasks = await q<ItemTaskRow>(
+    `select id, tree_item_id, node_id, title, status, assignee, executor, updated_at
+     from tasks where space_id = $1 order by created_at desc limit 500`,
+    [spaceId],
+  );
+
+  const map: Record<string, ItemTaskRow> = {};
+  for (const branch of treeRow.tree.branches) {
+    for (const child of branch.children) {
+      const task = findTaskForItem({ nodeId: child.nodeId, question: child.question }, tasks);
+      if (task) map[child.id] = { ...task, tree_item_id: child.id };
+    }
+  }
+  return map;
 }
 
 export type DispatchMode = 'gaps' | 'missing' | 'all' | 'selected';
@@ -49,28 +70,22 @@ export async function dispatchTree(opts: {
   ]);
   if (!tree) throw new Error('问题树不存在');
 
-  const active = await q<{ tree_item_id: string }>(
-    `select distinct tree_item_id from tasks
-     where space_id = $1 and tree_id = $2 and tree_item_id is not null
-       and status in ('open','claimed','submitted','approved')`,
-    [opts.spaceId, opts.treeId],
+  const existingTasks = await q<ItemTaskRow>(
+    `select id, tree_item_id, node_id, title, status, assignee, executor, updated_at
+     from tasks where space_id = $1 order by created_at desc limit 500`,
+    [opts.spaceId],
   );
-  const activeIds = new Set(active.map((row) => row.tree_item_id));
-
-  const ever = await q<{ tree_item_id: string }>(
-    `select distinct tree_item_id from tasks where space_id = $1 and tree_id = $2 and tree_item_id is not null`,
-    [opts.spaceId, opts.treeId],
-  );
-  const everIds = new Set(ever.map((row) => row.tree_item_id));
 
   const selected = new Set(opts.itemIds ?? []);
   const created: Array<{ id: string; treeItemId: string; title: string }> = [];
 
   for (const branch of tree.tree.branches) {
     for (const child of branch.children) {
-      if (activeIds.has(child.id)) continue;
+      const existing = findTaskForItem({ nodeId: child.nodeId, question: child.question }, existingTasks);
+      // 已有进行中/待验收/已通过的同一问题，就不重复派
+      if (existing && ['open', 'claimed', 'submitted', 'approved'].includes(existing.status)) continue;
+      if (opts.mode === 'missing' && existing) continue;
       if (opts.mode === 'gaps' && child.kind !== 'gap') continue;
-      if (opts.mode === 'missing' && everIds.has(child.id)) continue;
       if (opts.mode === 'selected' && !selected.has(child.id)) continue;
 
       const prompt = `命题：${tree.tree.root.question}

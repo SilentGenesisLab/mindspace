@@ -45,6 +45,31 @@ export async function generateTree(spaceId: string, userId: string | null) {
 
   const clusterText = clusters.map((c) => `${c.label}(${c.node_count})`).join('、') || '尚未成簇';
 
+  // 已验收的结论视为已覆盖，避免下一轮收束又把它们列为缺口。
+  const resolved = await q<{ title: string; result: string; assignee: string | null }>(
+    `select title, result, assignee from tasks
+     where space_id = $1 and status = 'approved' and result is not null
+     order by updated_at desc limit 12`,
+    [spaceId],
+  );
+  const resolvedText = resolved.length
+    ? `\n已验收的结论（这些已经被解决了，不要再当作缺口；可在 solve 里引用）：\n${resolved
+        .map((item) => `- ${item.title} → ${item.result.replace(/\s+/g, ' ').slice(0, 260)}`)
+        .join('\n')}`
+    : '';
+
+  // 把上一版条目带进 prompt，要求仍然成立的问题逐字复用，任务状态才能跨版本接上。
+  const previous = await one<{ tree: IssueTree }>(
+    'select tree from space_trees where space_id = $1 order by created_at desc limit 1',
+    [spaceId],
+  );
+  const previousText = previous
+    ? `\n上一版问题树（仍然成立的问题必须逐字复用 question，不要改写；已被已验收结论解决的不要再列）：\n${previous.tree.branches
+        .flatMap((branch) => branch.children)
+        .map((child) => `- [${child.kind}] ${child.question}`)
+        .join('\n')}`
+    : '';
+
   const started = Date.now();
   const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
     {
@@ -60,14 +85,17 @@ export async function generateTree(spaceId: string, userId: string | null) {
 
 现有问题（编号是索引，用于对齐真实节点）：
 ${listing}
+${resolvedText}
+${previousText}
 
 请把这堆问题收束成一棵"怎么解决这个命题"的议题树。要求：
 1. 2-6 个一级分支，彼此互斥、合起来覆盖命题（MECE），按对结果的影响从大到小排序。
-2. 每个分支 2-4 个具体问题。能对应到现有问题的用 nodeIndex 写它的索引；现有问题没覆盖到的关键盲区，写成 gap。
+2. 每个分支 2-4 个具体问题。能对应到现有问题的用 nodeIndex 写它的索引；现有问题没覆盖到的关键盲区，写成 gap。已验收结论覆盖的内容不要再列为 gap。
 3. 每个问题给一句 solve：怎么验证它 / 怎么解（要具体到可执行，不要空话）。
 4. 叶子必须是可以直接派给一个人或 Agent 去做的问题，不要出现"深入研究"这种空泛表述。
 5. 分支给一句 why：为什么这条分支决定成败。
 6. 最后给 3-5 条 next_actions：按顺序，谁先做什么。
+7. 上一版里仍然成立的问题，question 必须逐字复用上一版文本，不要改写（否则任务状态会断）。
 
 输出 JSON：
 {"root":{"question":"一句话把命题变成要回答的问题","summary":"30 字内说清收束思路"},
