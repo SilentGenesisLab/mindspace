@@ -1,0 +1,22 @@
+[Unit]
+Description=Mindspace (Next.js)
+After=network.target postgresql@16-main.service
+
+[Service]
+Type=simple
+User=donxu
+WorkingDirectory=/home/donxu/apps/mindspace
+EnvironmentFile=/home/donxu/apps/mindspace/.env
+Environment=NODE_ENV=production
+Environment=PORT=3020
+Environment=HOSTNAME=127.0.0.1
+Environment=PATH=/home/donxu/.local/node24/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/donxu/.local/node24/bin/node node_modules/next/dist/bin/next start -p 3020 -H 127.0.0.1
+Restart=always
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=30
+MemoryMax=1800M
+
+[Install]
+WantedBy=multi-user.target

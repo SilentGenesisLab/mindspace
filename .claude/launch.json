@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "mindspace-local",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "start:local"],
+      "port": 3033
+    }
+  ]
+}

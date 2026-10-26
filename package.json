@@ -1,0 +1,29 @@
+{
+  "name": "mindspace",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --webpack -p 3020",
+    "build": "next build --webpack",
+    "start": "next start -p 3020 -H 127.0.0.1",
+    "start:local": "next start -p 3033 -H 127.0.0.1",
+    "migrate": "node scripts/migrate.mjs",
+    "cli": "node cli/mindspace.mjs"
+  },
+  "dependencies": {
+    "jose": "6.2.13",
+    "next": "16.4.3",
+    "pg": "8.23.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "three": "0.186.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/pg": "8.23.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@types/three": "0.186.0",
+    "typescript": "5.9.3"
+  }
+}
