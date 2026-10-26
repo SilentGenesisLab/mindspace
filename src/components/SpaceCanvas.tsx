@@ -243,6 +243,10 @@ export default function SpaceCanvas({ nodes, edges, clusters, focusIds, selected
           }
           const lw = label.width;
           const lh = 17;
+          if (x - lw / 2 < 8 || x + lw / 2 > w - 8) {
+            label.el.style.display = 'none';
+            continue;
+          }
           const left = x - lw / 2;
           const top = y;
           const collides = rects.some(
@@ -405,7 +409,7 @@ export default function SpaceCanvas({ nodes, edges, clusters, focusIds, selected
       const hFov = 2 * Math.atan(Math.tan(vFov / 2) * s.camera.aspect);
       const fit = Math.max(maxR / Math.sin(vFov / 2), maxR / Math.sin(hFov / 2));
       s.controls.target.set(cx, cy, cz);
-      s.camera.position.set(cx, cy + maxR * 0.18, cz + fit * 1.12 + 30);
+      s.camera.position.set(cx, cy + maxR * 0.18, cz + fit * 1.22 + 30);
       s.camera.near = 1;
       s.camera.far = maxR * 12 + 3000;
       s.camera.updateProjectionMatrix();

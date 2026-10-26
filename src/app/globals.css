@@ -1556,6 +1556,23 @@ textarea.input {
   .shell {
     width: calc(100% - 32px);
   }
+  .composer {
+    bottom: 14px;
+    width: calc(100% - 24px);
+  }
+  .composer-meta {
+    flex-wrap: nowrap;
+    gap: 8px;
+  }
+  .composer-hint {
+    display: none;
+  }
+  .composer textarea {
+    overflow-y: hidden;
+  }
+  .composer-kind button {
+    padding: 3px 10px;
+  }
   .rail {
     display: none;
     top: 84px;
