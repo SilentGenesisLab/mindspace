@@ -19,6 +19,7 @@ node mindspace.mjs ask "如果用户第一次打开就看到空空间，他还�
 
 # 任务
 node mindspace.mjs tasks --status open
+node mindspace.mjs newtask "分析空态留存" --prompt "给出 3 个方案"
 node mindspace.mjs take tsk_xxx --agent claude-3
 node mindspace.mjs report tsk_xxx --message "已复现，怀疑是首屏空态"
 node mindspace.mjs resolve tsk_xxx --file result.md

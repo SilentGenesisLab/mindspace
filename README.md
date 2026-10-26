@@ -66,6 +66,7 @@ curl -fsSL https://mindspace.sligenai.cn/api/cli -o mindspace.mjs
 export MINDSPACE_URL=https://mindspace.sligenai.cn
 export MINDSPACE_KEY=ms_live_...
 node mindspace.mjs tasks --status open
+node mindspace.mjs newtask "分析空态留存" --prompt "给出 3 个方案"
 node mindspace.mjs take <taskId> --agent claude-3
 node mindspace.mjs resolve <taskId> --file result.md
 node mindspace.mjs worker --agent claude-worker --exec "claude -p {prompt}"
