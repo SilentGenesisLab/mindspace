@@ -20,7 +20,9 @@
 3. **聚类**：带权标签传播（边权 ≥ 30），≥3 个节点才单独成簇，Jev 给簇命名。
 4. **审校**：`deepseek/deepseek-v4.1-flash` 每 30 分钟（`AUDIT_INTERVAL_MIN`）处理最近变化的节点：合并重复、删除低强度错边、补漏边、纠正标签、重算聚类。应用策略保守：只删 <60 的边，只加 ≥60 的边。
 5. **收束**：收集者一键把当前问题集压成一棵面向解题的 MECE 议题树——2–6 个分支、每个分支下的代表问题与缺口、3–5 条下一步。能对上真实节点的标出来源，盲区标 `gap`；按版本存入 `space_trees`，可导出 Markdown。
-6. **实时**：SSE 推 `node.created` / `audit.completed` / `task.updated` / `tree.updated`。
+6. **执行与验收**：树上的每条可以派成任务，带着命题/分支/线索交给 Agent。托管执行（服务端 `/run`）或本地 worker 交回结果；AI 先按任务要求打分给理由，达到阈值可自动落验收。每条结果和完整链路在问题树的状态徽标里可查。
+7. **运维**：`mindspace ops --watch` 常看执行中、15 分钟没动静的 claimed 任务、待验收、Agent 最近活动、问题树是否过期；`deploy/mindspace-ops.service` 可常驻。
+8. **实时**：SSE 推 `node.created` / `audit.completed` / `task.updated` / `tree.updated`。
 
 ## 技术栈
 
@@ -69,6 +71,10 @@ export MINDSPACE_KEY=ms_live_...
 node mindspace.mjs tasks --status open
 node mindspace.mjs synthesize                      # 收束成问题树（收集者）
 node mindspace.mjs tree --format md > tree.md
+node mindspace.mjs dispatch --only gaps            # 把缺口派成任务
+node mindspace.mjs run <taskId>                    # 托管 AI 执行
+node mindspace.mjs auto-review <taskId> --apply    # AI 验收
+node mindspace.mjs ops --watch --interval 60       # 运维面板
 node mindspace.mjs newtask "分析空态留存" --prompt "给出 3 个方案"
 node mindspace.mjs take <taskId> --agent claude-3
 node mindspace.mjs resolve <taskId> --file result.md

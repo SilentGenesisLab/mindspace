@@ -207,6 +207,87 @@ async function main() {
       return;
     }
 
+    case 'dispatch': {
+      const slug = await spaceSlug();
+      const mode = String(flags.only || 'missing');
+      const body = { mode };
+      if (flags.tree) body.treeId = String(flags.tree);
+      if (flags.items) body.itemIds = String(flags.items).split(',').map((s) => s.trim()).filter(Boolean);
+      if (mode === 'selected' && !body.itemIds) die('selected 模式需要 --items b1-1,b1-2');
+      const data = await api(`/api/spaces/${slug}/tree/dispatch`, 'POST', body);
+      if (raw) return out(data);
+      console.log(`✔ 派发 ${data.created} 个任务`);
+      for (const task of data.tasks) console.log(`  ${task.treeItemId}  ${short(task.title, 60)}`);
+      return;
+    }
+
+    case 'run': {
+      const slug = await spaceSlug();
+      const id = positional[0];
+      if (!id) die('用法: mindspace run <taskId> [--model anthropic/claude-sonnet-5.5]');
+      console.log('托管执行中…（约 10–60 秒）');
+      const data = await api(`/api/spaces/${slug}/tasks/${id}/run`, 'POST', { model: flags.model });
+      if (raw) return out(data);
+      console.log(`✔ ${data.task.status} · ${data.task.assignee}`);
+      console.log('');
+      console.log(data.task.result);
+      return;
+    }
+
+    case 'auto-review': {
+      const slug = await spaceSlug();
+      const id = positional[0];
+      if (!id) die('用法: mindspace auto-review <taskId> [--apply] [--threshold 70]');
+      const data = await api(`/api/spaces/${slug}/tasks/${id}/auto-review`, 'POST', {
+        apply: Boolean(flags.apply),
+        threshold: Number(flags.threshold) || 70,
+      });
+      if (raw) return out(data);
+      console.log(`评分 ${data.score} · ${data.decision === 'approve' ? '建议通过' : '建议退回'}${data.applied ? ' · 已落验收' : ''}`);
+      for (const reason of data.reasons) console.log(`  · ${reason}`);
+      if (data.missing?.length) console.log(`  缺：${data.missing.join('；')}`);
+      return;
+    }
+
+    case 'ops': {
+      const slug = await spaceSlug();
+      const interval = Math.max(5, Number(flags.interval) || 30) * 1000;
+      for (;;) {
+        const data = await api(`/api/spaces/${slug}/ops`);
+        if (raw) out(data);
+        else {
+          if (process.stdout.isTTY && flags.watch) process.stdout.write('\x1b[2J\x1b[H');
+          const c = data.counts;
+          console.log(`[${new Date().toLocaleTimeString('zh-CN')}] ${slug} · 空间 ${data.nodes} 个问题`);
+          console.log(`任务  open ${c.open} · claimed ${c.claimed} · submitted ${c.submitted} · approved ${c.approved} · rejected ${c.rejected}`);
+          if (data.agents.length) {
+            console.log('Agent');
+            for (const agent of data.agents) {
+              console.log(`  ${agent.assignee.padEnd(28)} ${String(agent.count).padStart(2)} 个 · 最近 ${new Date(agent.last_at).toLocaleString('zh-CN')}`);
+            }
+          }
+          if (data.active.length) {
+            console.log('在跑 / 待验收');
+            for (const task of data.active) {
+              const flag = task.status === 'claimed' && task.minutes >= 15 ? ' ⚠ 停滞' : '';
+              console.log(`  [${task.status}] ${task.id.slice(0, 8)} ${String(task.minutes).padStart(4)}m ${task.assignee || '-'} · ${short(task.title, 40)}${flag}`);
+            }
+          }
+          if (data.tree) {
+            console.log(
+              `问题树  ${new Date(data.tree.created_at).toLocaleString('zh-CN')} · 已派 ${data.tree.dispatched} · 已验收 ${data.tree.approved}${data.tree.stale ? ' · ⚠ 有新问题，建议重新收束' : ''}`,
+            );
+          } else {
+            console.log('问题树  还没有收束');
+          }
+          if (data.last_audit) console.log(`最近审校  ${new Date(data.last_audit.started_at).toLocaleString('zh-CN')}`);
+          if (data.stale.length) console.log(`⚠ ${data.stale.length} 个任务超过 15 分钟没有动静`);
+        }
+        if (!flags.watch) return;
+        await sleep(interval);
+      }
+    }
+
     case 'newtask': {
       const slug = await spaceSlug();
       const title = positional.join(' ').trim() || flags.title;
@@ -370,7 +451,26 @@ async function main() {
           child.stdout.on('data', (chunk) => (stdout += chunk));
           child.stderr.on('data', (chunk) => (stderr += chunk));
           if (!template.includes('{prompt}')) child.stdin.end(prompt);
+
+          const startedAt = Date.now();
+          const heartbeatMs = Math.max(30, Number(flags.heartbeat || 120)) * 1000;
+          const beat = setInterval(() => {
+            fetch(`${BASE}/api/spaces/${slug}/tasks/${task.id}/events`, {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${KEY}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                action: 'report',
+                message: `运行中 · ${Math.round((Date.now() - startedAt) / 1000)}s`,
+              }),
+            }).catch(() => {});
+          }, heartbeatMs);
+          const killer = setTimeout(() => {
+            child.kill('SIGKILL');
+          }, Math.max(30, Number(flags.timeout || 600)) * 1000);
+
           child.on('close', async (code) => {
+            clearInterval(beat);
+            clearTimeout(killer);
             if (code === 0 && stdout.trim()) {
               await api(`/api/spaces/${slug}/tasks/${task.id}/events`, 'POST', {
                 action: 'result',
@@ -403,6 +503,10 @@ async function main() {
   mindspace ask "问题内容"                  以 Agent 身份投稿
   mindspace tree [--format md]             查看收束后的问题树
   mindspace synthesize                     把当前问题集收束成议题树（收集者）
+  mindspace dispatch [--only gaps|missing|all]  把树条目派成任务（收集者）
+  mindspace run <taskId> [--model ...]     用托管 Claude 执行任务（收集者）
+  mindspace auto-review <taskId> [--apply] Agent 验收并给分（收集者）
+  mindspace ops [--watch] [--interval 30]  运维面板：在跑/卡住/待验收/树是否过期
   mindspace newtask "标题" --prompt "..."    创建任务（可 --assignee 指派）
   mindspace tasks [--status open]          任务队列
   mindspace show <taskId>                  任务详情与时间线

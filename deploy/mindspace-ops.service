@@ -1,0 +1,16 @@
+[Unit]
+Description=Mindspace ops watcher (task SLA / tree freshness)
+After=network.target mindspace.service redis-server.service
+
+[Service]
+Type=simple
+User=donxu
+WorkingDirectory=/home/donxu/apps/mindspace
+EnvironmentFile=/home/donxu/apps/mindspace/ops-agent.env
+Environment=PATH=/home/donxu/.local/node24/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/donxu/.local/node24/bin/node cli/mindspace.mjs ops --watch --interval 60
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

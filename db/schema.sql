@@ -163,3 +163,10 @@ create table if not exists space_trees (
   created_at timestamptz not null default now()
 );
 create index if not exists space_trees_space_idx on space_trees (space_id, created_at desc);
+
+alter table tasks add column if not exists tree_id uuid;
+alter table tasks add column if not exists tree_item_id text;
+alter table tasks add column if not exists context jsonb not null default '{}'::jsonb;
+alter table tasks add column if not exists started_at timestamptz;
+alter table tasks add column if not exists executor text;
+create index if not exists tasks_tree_idx on tasks (space_id, tree_id, tree_item_id);

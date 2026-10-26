@@ -38,6 +38,21 @@ node mindspace.mjs synthesize
 node mindspace.mjs tree
 node mindspace.mjs tree --format md > issue-tree.md`;
 
+const execCmd = `# 收束后，把缺口/选中条目派成任务
+node mindspace.mjs dispatch --only gaps
+node mindspace.mjs dispatch --only selected --items b1-2,b5-2
+
+# 托管执行（服务端直接跑模型）→ 提交 → AI 验收
+node mindspace.mjs tasks --status open
+node mindspace.mjs run <taskId>
+node mindspace.mjs auto-review <taskId> --apply
+
+# 或者让本地 Claude 进程领任务干活
+node mindspace.mjs worker --agent claude-1 --exec "claude -p {prompt}"
+
+# 运维面板：在跑 / 停滞 / 待验收 / 树是否过期
+node mindspace.mjs ops --watch --interval 60`;
+
 const api = `GET    /api/spaces/:slug/graph
 GET    /api/spaces/:slug/nodes?q=&tag=&author=&domain=&type=
 POST   /api/spaces/:slug/nodes            { "content": "...", "kind": "question" }
@@ -46,9 +61,13 @@ POST   /api/spaces/:slug/tasks            { "title": "...", "prompt": "..." }
 GET    /api/spaces/:slug/tasks/:id
 POST   /api/spaces/:slug/tasks/:id/events { "action": "claim|report|result|approve|reject",
                                             "message": "...", "result": "..." }
-GET    /api/spaces/:slug/tree             # 最新问题树
+POST   /api/spaces/:slug/tasks/:id/run    { "model": "..." }   # 托管执行
+POST   /api/spaces/:slug/tasks/:id/auto-review { "apply": true, "threshold": 70 }
+GET    /api/spaces/:slug/tree             # 最新问题树 + 每条目的任务状态
 POST   /api/spaces/:slug/tree             # 收束（收集者）
+POST   /api/spaces/:slug/tree/dispatch    { "mode": "gaps|missing|all|selected" }
 GET    /api/spaces/:slug/tree?format=md   # 导出问题树
+GET    /api/spaces/:slug/ops              # 运维快照
 POST   /api/spaces/:slug/audit
 GET    /api/spaces/:slug/export?format=json|csv|md
 
@@ -127,7 +146,20 @@ export default function DocsPage() {
           <code>{treeCmd}</code>
         </pre>
 
-        <h2>8. 关系与审校</h2>
+        <h2>8. 执行与验收</h2>
+        <p>
+          问题树上的每一条都是可派发的工作项。派发后任务会带着命题、分支和线索一起交给 Agent；
+          执行完回到「待验收」，AI 先按任务要求打分并给理由，达到阈值可以直接落验收，也可以由人复核。
+        </p>
+        <pre>
+          <code>{execCmd}</code>
+        </pre>
+        <p>
+          托管执行默认用 <code>RUN_MODEL</code>（默认 deepseek-v4.1-flash）。Anthropic 模型在部分区域会被
+          OpenRouter 拒绝，需要本地 Claude Code / worker 或代理；代码、文件类任务也应该走本地 worker。
+        </p>
+
+        <h2>9. 关系与审校</h2>
         <p>
           每次投稿都会调用 <code>typesafe/jev-router</code> 判断与既有节点的关系强度（35 分以下不连边）。
           后台可以手动触发 <code>deepseek/deepseek-v4.1-flash</code> 审校；正式运行后每 30 分钟自动跑一轮：

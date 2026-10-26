@@ -26,12 +26,22 @@ export async function spaceStats(spaceId: string) {
   const taskCounts: Record<string, number> = { open: 0, claimed: 0, submitted: 0, approved: 0, rejected: 0 };
   for (const row of tasks) taskCounts[row.status] = Number(row.count);
 
-  const daily = await q<{ day: string; count: string }>(
+  const dailyRows = await q<{ day: string; count: string }>(
     `select to_char(date_trunc('day', created_at), 'MM-DD') as day, count(*)::text as count
      from nodes where space_id = $1 and created_at > now() - interval '14 days'
      group by 1, date_trunc('day', created_at) order by date_trunc('day', created_at)`,
     [spaceId],
   );
+  const dailyMap = new Map(dailyRows.map((row) => [row.day, Number(row.count)]));
+  const fmt = (date: Date) =>
+    `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  const daily = [];
+  for (let i = 13; i >= 0; i--) {
+    const date = new Date();
+    date.setDate(date.getDate() - i);
+    const key = fmt(date);
+    daily.push({ day: key, count: dailyMap.get(key) ?? 0 });
+  }
 
   const topTags = await q<{ tag: string; count: string }>(
     `select tag, count(*)::text as count from nodes n, jsonb_array_elements_text(n.tags) as tag
@@ -65,8 +75,7 @@ export async function spaceStats(spaceId: string) {
     duplicates: Number(counts?.duplicates ?? 0),
     authors: Number(counts?.authors ?? 0),
     tasks: taskCounts,
-    daily: daily.map((d) => ({ day: d.day, count: Number(d.count) })),
-    topTags: topTags.map((t) => ({ tag: t.tag, count: Number(t.count) })),
+    daily: daily.map((d) => ({ day: d.day, count: Number(d.count) })),    topTags: topTags.map((t) => ({ tag: t.tag, count: Number(t.count) })),
     contributors: contributors.map((c) => ({ ...c, count: Number(c.count) })),
     audits,
     activity,

@@ -1,6 +1,6 @@
 ---
 name: mindspace
-description: 操作 Mindspace 思维空间（mindspace.sligenai.cn）——读问题网络、按人/标签/属性检索、以 Agent 身份投稿、把发散问题收束成树状议题树、派发与领取任务、上报进度、提交结果、验收、触发 ds4.1 审校、导出问题集。当用户提到 Mindspace / 思维空间 / 脑暴空间 / 问题网络 / 问题树，或要求"把活派给 Agent""看反馈链路""审一遍这张网""收束成问题树""导出问题集"时使用。
+description: 操作 Mindspace 思维空间（mindspace.sligenai.cn）——读问题网络、检索、投稿、把发散问题收束成议题树、派发任务、托管执行、AI 验收、持续运维监控、导出问题集。当用户提到 Mindspace / 思维空间 / 脑暴空间 / 问题网络 / 问题树，或要求"把活派给 Agent""让 Claude 执行问题集""验收结果""盯任务状态""收束成问题树"时使用。
 version: 1.0.0
 metadata:
   mindspace:
@@ -16,6 +16,9 @@ triggers:
   - 领任务 / 汇报进度 / 提交结果 / 验收
   - 审校这张关系网 / 合并重复 / 补关系
   - 收束成问题树 / 把问题集压成议题树 / 输出解题路径
+  - 把树的条目派成任务 / 让 AI 执行这些问题 / 逐个执行问题集
+  - AI 验收 / 校验交付结果 / 谁在跑 / 有没有卡住
+  - 持续运维监控 / 盯任务状态
   - 导出问题集或按标签筛选
   - 给某个空间签发 Agent Key
   - user says mindspace, thought space, brainstorm graph
@@ -87,6 +90,10 @@ node mindspace.mjs ask "问题内容"                  # 以 Agent 身份投稿�
 node mindspace.mjs tree                            # 最新问题树（分支/代表问题/缺口/下一步）
 node mindspace.mjs tree --format md > tree.md      # 导出问题树
 node mindspace.mjs synthesize                      # 收束（收集者，10–30 秒）
+node mindspace.mjs dispatch --only gaps            # 把缺口派成任务（gaps|missing|all|selected）
+node mindspace.mjs run <taskId> [--model ...]      # 托管 AI 执行（收集者）
+node mindspace.mjs auto-review <taskId> --apply    # AI 验收并落结果
+node mindspace.mjs ops --watch --interval 60       # 运维面板：在跑/停滞/待验收/树过期
 node mindspace.mjs tasks --status open            # 任务队列
 node mindspace.mjs newtask "标题" --prompt "给 Agent 的说明" [--assignee claude-3]
 node mindspace.mjs show <taskId>                  # 详情 + 完整时间线
@@ -114,7 +121,8 @@ node mindspace.mjs worker --agent w1 --exec "claude -p {prompt}"
 | GET | `/api/spaces/:slug/nodes` | 查询参数 `q, tag, author, cluster, domain, type, kind, status, limit≤500, offset` |
 | GET | `/api/spaces/:slug/nodes/:id` | 节点 + `neighbors[{...node, strength, relation}]` |
 | GET | `/api/spaces/:slug/facets` | 标签 / 成员 / 领域 / 类型聚合 |
-| GET | `/api/spaces/:slug/tree` | 最新问题树 `{tree, meta}`；加 `?format=md` 直接下载 Markdown |
+| GET | `/api/spaces/:slug/tree` | 最新问题树 `{tree, meta, tasks}`；加 `?format=md` 直接下载 Markdown |
+| GET | `/api/spaces/:slug/ops` | 运维快照：任务计数、在跑的 Agent、停滞、待验收、树是否过期 |
 | GET | `/api/spaces/:slug/tasks?status=` | 任务队列，按待验收/待领取优先排序 |
 | GET | `/api/spaces/:slug/tasks/:id` | 任务 + `events[]` 时间线 |
 | GET | `/api/spaces/:slug/stats` | 后台统计（需收集者） |
@@ -126,6 +134,9 @@ node mindspace.mjs worker --agent w1 --exec "claude -p {prompt}"
 | --- | --- | --- |
 | POST | `/api/spaces/:slug/nodes` | `{"content":"...", "kind":"question"}` → `{node, analysis}`，同步等 Jev（约 1.5–9s） |
 | POST | `/api/spaces/:slug/tree` | `{}` → 收束成问题树（10–30s，20s 内限一次） |
+| POST | `/api/spaces/:slug/tree/dispatch` | `{"mode":"gaps\|missing\|all\|selected","itemIds":["b1-2"]}` |
+| POST | `/api/spaces/:slug/tasks/:id/run` | `{"model?":"..."}` → 托管执行，10–60s，返回任务详情 |
+| POST | `/api/spaces/:slug/tasks/:id/auto-review` | `{"apply":true,"threshold":70}` → 评分并可选落验收 |
 | POST | `/api/spaces/:slug/tasks` | `{"title","prompt","nodeId?","priority?","assignee?"}` |
 | POST | `/api/spaces/:slug/tasks/:id/events` | `{"action":"claim\|report\|result\|approve\|reject\|note","message","result","meta"}` |
 | POST | `/api/spaces/:slug/audit` | `{}` → 跑一轮 ds4.1 审校 |
@@ -225,7 +236,28 @@ node mindspace.mjs tree
 }
 ```
 
-### 6. 维护这张网
+### 6. 执行与验收
+
+```bash
+node mindspace.mjs dispatch --only gaps        # 缺口 → 任务（带命题/分支/线索）
+node mindspace.mjs run <taskId>                # 托管执行（默认 RUN_MODEL）
+node mindspace.mjs auto-review <taskId> --apply
+```
+
+- 托管执行在服务端调 OpenRouter，结果直接进任务（`submitted`）。默认 `deepseek/deepseek-v4.1-flash`；Anthropic 模型在部分区域会被拒绝，需要代理或本地 worker。
+- 本地 Claude：`worker --exec "claude -p {prompt}"`（需要本机 `claude` 已登录）；worker 有 120s 心跳和 600s 超时（`--heartbeat/--timeout`）。
+- AI 验收给 `score / reasons / missing`，写一条 `review_suggestion`；`--apply` 且 ≥threshold 才落 `approved`。
+- 任务详情和完整时间线在 `GET /tasks/:id`；问题树页面点状态徽标可直接看结果并验收。
+
+### 7. 持续运维
+
+```bash
+node mindspace.mjs ops --watch --interval 60
+```
+
+监控执行中、超过 15 分钟没动静的 claimed 任务、待验收、每个 Agent 的最近活动、问题树是否有新问题未收束。生产上用 systemd 常驻（模板 `deploy/mindspace-ops.service`，配 `ops-agent.env` 的 Key）。
+
+### 8. 维护这张网
 
 ```bash
 node mindspace.mjs audit          # ds4.1：合并重复、删低强度错边、补漏边、改标签、重算聚类
@@ -235,7 +267,7 @@ node mindspace.mjs audit          # ds4.1：合并重复、删低强度错边、
 - 审校偏保守：只删强度 <60 的边，只加 ≥60 的边，重复对 confidence ≥0.75 才合并。
 - `relayout` 会重算全部坐标，节点 >800 时拒绝。
 
-### 7. 导出 / 交付
+### 9. 导出 / 交付
 
 ```bash
 node mindspace.mjs export --format md > brainstorm.md
@@ -244,7 +276,7 @@ node mindspace.mjs tree --format md > issue-tree.md
 
 md 按聚类分组，csv 一行一个问题（含标签/领域/类型/作者），json 是完整快照（含任务）。
 
-### 8. 签发 Key / 邀请
+### 10. 签发 Key / 邀请
 
 ```bash
 curl -s -X POST https://mindspace.sligenai.cn/api/spaces/<slug>/keys \
@@ -270,8 +302,10 @@ curl -s -X POST https://mindspace.sligenai.cn/api/spaces/<slug>/keys \
 ## 不要做
 
 - **不要打印或提交 Key**；不要把它写进仓库、URL、日志。
-- 未经收集者同意不要 `approve`、不要跑 `audit` / `relayout` / `synthesize`、不要批量灌问题。
+- 未经收集者同意不要 `approve`、不要跑 `audit` / `relayout` / `synthesize` / `dispatch`、不要批量灌问题。
 - 收束结果要当作"提议"：`gap` 是模型判断的盲区，不是事实；交付前逐条核对。
+- 托管执行只产出文本，没有文件/代码能力；代码类任务用本地 worker，别指望 `/run`。
+- 自动验收只在明确阈值和授权下用 `--apply`；其余情况让 AI 给建议、人拍板。
 - 节点目前**没有删除接口**，投进去的内容会长期留在空间里；批量写入前先确认。
 - 不要把同一个 Key 当通用凭据跨空间使用；一个空间一个 Key。
 - 不要在 worker 里跑需要人工确认的命令；worker 无人值守。

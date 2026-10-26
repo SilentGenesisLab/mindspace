@@ -24,6 +24,16 @@ type Member = { id: string; nickname: string; color: string; role: string; joine
 type SpaceInfo = { title: string; direction: string; invite_code?: string; slug: string; created_at: string };
 type ApiKey = { id: string; name: string; prefix: string; created_at: string; last_used_at: string | null; revoked_at: string | null };
 
+type Ops = {
+  counts: Record<string, number>;
+  agents: Array<{ assignee: string; count: number; last_at: string }>;
+  active: Array<{ id: string; title: string; status: string; assignee: string | null; minutes: number }>;
+  stale: Array<{ id: string; title: string; assignee: string | null; minutes: number }>;
+  tree: { id: string; created_at: string; dispatched: number; approved: number; stale: boolean } | null;
+  last_audit: { started_at: string } | null;
+  nodes: number;
+};
+
 const STATUS_META: Record<string, { label: string; color: string }> = {
   open: { label: '待领取', color: '#57d4ff' },
   claimed: { label: '进行中', color: '#ffb547' },
@@ -39,6 +49,7 @@ export default function AdminDashboard({ slug }: { slug: string }) {
   const [members, setMembers] = useState<Member[]>([]);
   const [tasks, setTasks] = useState<TaskDTO[]>([]);
   const [keys, setKeys] = useState<ApiKey[]>([]);
+  const [ops, setOps] = useState<Ops | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
 
@@ -65,6 +76,8 @@ export default function AdminDashboard({ slug }: { slug: string }) {
       fetch(`/api/spaces/${slug}/tasks`),
       fetch(`/api/spaces/${slug}/keys`),
     ]);
+    const opsRes = await fetch(`/api/spaces/${slug}/ops`);
+    if (opsRes.ok) setOps(await opsRes.json());
     if (!spaceRes.ok) {
       const data = await spaceRes.json().catch(() => ({}));
       setError(data.error || '无法读取空间');
@@ -145,6 +158,44 @@ export default function AdminDashboard({ slug }: { slug: string }) {
       notify(`已重排 ${data.nodes} 个节点 · ${data.clusters} 个聚类`);
     } catch (err) {
       notify(err instanceof Error ? err.message : '重排失败');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function runTask(id: string) {
+    setBusy(`run-${id}`);
+    try {
+      const res = await fetch(`/api/spaces/${slug}/tasks/${id}/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '执行失败');
+      notify('Claude 已交付，等待验收');
+      await load();
+    } catch (err) {
+      notify(err instanceof Error ? err.message : '执行失败');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function autoReview(id: string) {
+    setBusy(`ai-review-${id}`);
+    try {
+      const res = await fetch(`/api/spaces/${slug}/tasks/${id}/auto-review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apply: true, threshold: 70 }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '验收失败');
+      notify(data.applied ? `AI 验收通过 · ${data.score} 分` : `AI 验收 ${data.score} 分，建议退回`);
+      await load();
+    } catch (err) {
+      notify(err instanceof Error ? err.message : '验收失败');
     } finally {
       setBusy('');
     }
@@ -315,6 +366,62 @@ export default function AdminDashboard({ slug }: { slug: string }) {
         <div>
           <section className="section">
             <div className="section-head">
+              <h3>执行与运维</h3>
+              <span className="badge">30s 自动刷新</span>
+            </div>
+            <div className="section-body">
+              <div className="ops-grid">
+                <div>
+                  <div className="k">执行中</div>
+                  <b>{ops?.counts.claimed ?? 0}</b>
+                </div>
+                <div>
+                  <div className="k">待验收</div>
+                  <b>{ops?.counts.submitted ?? 0}</b>
+                </div>
+                <div>
+                  <div className="k">已验收</div>
+                  <b>{ops?.counts.approved ?? 0}</b>
+                </div>
+                <div>
+                  <div className="k">停滞 &gt;15m</div>
+                  <b className={ops?.stale.length ? 'warn' : ''}>{ops?.stale.length ?? 0}</b>
+                </div>
+              </div>
+
+              {ops?.tree && (
+                <div className="ops-line">
+                  问题树：已派 {ops.tree.dispatched} · 已验收 {ops.tree.approved}
+                  {ops.tree.stale && <span className="warn"> · 有新问题，建议重新收束</span>}
+                </div>
+              )}
+              {!ops?.tree && <div className="ops-line dim">还没有问题树</div>}
+
+              {ops?.agents.map((agent) => (
+                <div key={agent.assignee} className="ops-row">
+                  <span className="mono">{agent.assignee}</span>
+                  <span className="dim">
+                    {agent.count} 个任务 · 最近 {new Date(agent.last_at).toLocaleTimeString('zh-CN')}
+                  </span>
+                </div>
+              ))}
+
+              {ops?.active.slice(0, 6).map((task) => (
+                <div key={task.id} className="ops-row">
+                  <span className={`pill status-${task.status}`}>{task.status}</span>
+                  <span className="ops-title">{task.title}</span>
+                  <span className="mono dim">{task.minutes}m</span>
+                </div>
+              ))}
+
+              {ops && ops.stale.length > 0 && (
+                <div className="ops-alert">⚠ {ops.stale.length} 个任务超过 15 分钟没有动静</div>
+              )}
+            </div>
+          </section>
+
+          <section className="section">
+            <div className="section-head">
               <h3>任务队列 · 反馈链路</h3>
               <span className="badge">{tasks.length}</span>
             </div>
@@ -358,6 +465,19 @@ export default function AdminDashboard({ slug }: { slug: string }) {
                       <button className="btn btn-sm btn-ghost" onClick={() => void openTask(task.id)}>
                         {isOpen ? '收起' : '链路'}
                       </button>
+                    </div>
+
+                    <div className="task-actions">
+                      {['open', 'claimed', 'rejected'].includes(task.status) && (
+                        <button className="btn btn-sm" onClick={() => void runTask(task.id)} disabled={busy === `run-${task.id}`}>
+                          {busy === `run-${task.id}` ? '执行中…' : 'AI 执行'}
+                        </button>
+                      )}
+                      {task.status === 'submitted' && (
+                        <button className="btn btn-sm" onClick={() => void autoReview(task.id)} disabled={busy === `ai-review-${task.id}`}>
+                          {busy === `ai-review-${task.id}` ? '验收中…' : 'AI 验收'}
+                        </button>
+                      )}
                     </div>
 
                     {isOpen && detail && detail.task.id === task.id && (

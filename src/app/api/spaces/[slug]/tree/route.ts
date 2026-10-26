@@ -1,5 +1,6 @@
 import { requireSpaceActor } from '@/lib/auth';
 import { generateTree, latestTree, treeToMarkdown } from '@/lib/tree';
+import { treeTaskMap } from '@/lib/execution';
 import { fail, json, rateLimit } from '@/lib/http';
 
 export async function GET(req: Request, { params }: { params: Promise<{ slug: string }> }) {
@@ -27,6 +28,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
     return json({
       tree: row.tree,
       meta: { id: row.id, model: row.model, stats: row.stats, created_at: row.created_at },
+      tasks: await treeTaskMap(space.id, row.id),
     });
   } catch (err) {
     return fail(err);
