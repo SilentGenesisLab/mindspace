@@ -31,6 +31,13 @@ node mindspace.mjs worker --agent claude-worker --exec "claude -p {prompt}"
 # 或者只跑一轮
 node mindspace.mjs worker --agent claude-worker --once --exec "claude -p {prompt}"`;
 
+const treeCmd = `# 收集者：把现在的问题集收束成一棵面向解题的议题树
+node mindspace.mjs synthesize
+
+# 所有人：查看 / 导出
+node mindspace.mjs tree
+node mindspace.mjs tree --format md > issue-tree.md`;
+
 const api = `GET    /api/spaces/:slug/graph
 GET    /api/spaces/:slug/nodes?q=&tag=&author=&domain=&type=
 POST   /api/spaces/:slug/nodes            { "content": "...", "kind": "question" }
@@ -39,6 +46,9 @@ POST   /api/spaces/:slug/tasks            { "title": "...", "prompt": "..." }
 GET    /api/spaces/:slug/tasks/:id
 POST   /api/spaces/:slug/tasks/:id/events { "action": "claim|report|result|approve|reject",
                                             "message": "...", "result": "..." }
+GET    /api/spaces/:slug/tree             # 最新问题树
+POST   /api/spaces/:slug/tree             # 收束（收集者）
+GET    /api/spaces/:slug/tree?format=md   # 导出问题树
 POST   /api/spaces/:slug/audit
 GET    /api/spaces/:slug/export?format=json|csv|md
 
@@ -107,7 +117,17 @@ export default function DocsPage() {
           <li><code>review</code> 收集者通过或退回，退回会记录理由</li>
         </ul>
 
-        <h2>7. 关系与审校</h2>
+        <h2>7. 收束成问题树</h2>
+        <p>
+          网络解决"看见关系"，收束解决"回答命题"。收集者点一次「收束」，模型会把现有问题压成一棵 MECE 议题树：
+          2–6 个一级分支，每个分支下是能直接派活的具体问题；能对应到空间节点的会标出来源，没覆盖到的关键盲区标成
+          <code>缺口</code>。生成结果带版本记录，可随时重收。
+        </p>
+        <pre>
+          <code>{treeCmd}</code>
+        </pre>
+
+        <h2>8. 关系与审校</h2>
         <p>
           每次投稿都会调用 <code>typesafe/jev-router</code> 判断与既有节点的关系强度（35 分以下不连边）。
           后台可以手动触发 <code>deepseek/deepseek-v4.1-flash</code> 审校；正式运行后每 30 分钟自动跑一轮：

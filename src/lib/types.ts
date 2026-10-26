@@ -57,3 +57,26 @@ export type TaskEventDTO = {
   payload: Record<string, unknown>;
   created_at: string;
 };
+
+export type IssueTreeNode = {
+  id: string;
+  question: string;
+  solve: string;
+  kind: 'existing' | 'gap';
+  nodeId: string | null;
+};
+
+export type IssueTreeBranch = {
+  id: string;
+  title: string;
+  question: string;
+  why: string;
+  children: IssueTreeNode[];
+};
+
+export type IssueTree = {
+  root: { question: string; summary: string };
+  branches: IssueTreeBranch[];
+  nextActions: string[];
+};
+

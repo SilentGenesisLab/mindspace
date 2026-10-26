@@ -108,7 +108,7 @@ export default async function LandingPage() {
             </h1>
             <p className="hero-lede">
               不是一条时间线，也不是一个待办列表。每个问题进入空间时，Jev 会立刻判断它和谁相关、有多强；
-              关系越强，节点靠得越近。于是一群人的思考，长成一片可以走进去的地形。
+              关系越强，节点靠得越近。最后收集者按一次「收束」，这张网会压成一棵能回答命题的问题树。
             </p>
             <div className="hero-actions">
               <Link href={user ? '/app' : '/login'} className="btn btn-primary">
@@ -160,6 +160,13 @@ export default async function LandingPage() {
               <span className="idx">04 / 维护</span>
               <h3>定时审校</h3>
               <p>每隔一阵，ds4.1 会回看最近的节点：合并重复、删掉错边、补漏边、纠正标签，并把过程记进流水。</p>
+            </div>
+            <div className="feature">
+              <span className="idx">05 / 收束</span>
+              <h3>从网到树</h3>
+              <p>
+                一键把发散的问题压成 MECE 议题树：分支、代表问题、关键缺口、下一步。把"想清楚"变成"能派活"。
+              </p>
             </div>
           </div>
         </section>

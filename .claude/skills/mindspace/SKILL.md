@@ -1,6 +1,6 @@
 ---
 name: mindspace
-description: 操作 Mindspace 思维空间（mindspace.sligenai.cn）——读问题网络、按人/标签/属性检索、以 Agent 身份投稿、派发与领取任务、上报进度、提交结果、验收、触发 ds4.1 审校、导出问题集。当用户提到 Mindspace / 思维空间 / 脑暴空间 / 问题网络，或要求"把活派给 Agent""看反馈链路""审一遍这张网""导出问题集"时使用。
+description: 操作 Mindspace 思维空间（mindspace.sligenai.cn）——读问题网络、按人/标签/属性检索、以 Agent 身份投稿、把发散问题收束成树状议题树、派发与领取任务、上报进度、提交结果、验收、触发 ds4.1 审校、导出问题集。当用户提到 Mindspace / 思维空间 / 脑暴空间 / 问题网络 / 问题树，或要求"把活派给 Agent""看反馈链路""审一遍这张网""收束成问题树""导出问题集"时使用。
 version: 1.0.0
 metadata:
   mindspace:
@@ -15,6 +15,7 @@ triggers:
   - 把这个问题派给 Agent 解决
   - 领任务 / 汇报进度 / 提交结果 / 验收
   - 审校这张关系网 / 合并重复 / 补关系
+  - 收束成问题树 / 把问题集压成议题树 / 输出解题路径
   - 导出问题集或按标签筛选
   - 给某个空间签发 Agent Key
   - user says mindspace, thought space, brainstorm graph
@@ -23,6 +24,8 @@ triggers:
 # Mindspace 操作手册
 
 Mindspace 把集体脑暴变成一张空间关系网：每个问题是一个节点，Jev 判断它与既有节点的语义强度，力导布局让强关联靠得更近；ds4.1 每 30 分钟回看并维护。
+
+发散不是终点：收集者可以随时**收束**，把当前问题集压成一棵 MECE 议题树（分支 → 代表问题 → 缺口 → 下一步），直接回答空间命题。网络负责"看见关系"，问题树负责"能派活"。
 
 **两个角色**
 
@@ -62,6 +65,8 @@ edges     source, target, strength(35-100), relation(同题|追问|因果|回答
 clusters  id, label, summary, color, node_count        # ≥3 个节点才成簇
 tasks     id, title, prompt, status, assignee, priority, result, node_id
 task_events  task_id, actor_type(agent|user), actor_name, type, payload
+space_trees  id, tree{root,branches[{title,question,why,children[{question,solve,kind,nodeId}]}],nextActions},
+             stats, model, created_at        # 每次收束一个版本，取最新
 ```
 
 任务状态机：
@@ -79,6 +84,9 @@ node mindspace.mjs spaces                         # Key 绑定的空间
 node mindspace.mjs graph                          # 节点/边/聚类摘要 + 度数最高的节点
 node mindspace.mjs nodes --tag 冷启动 --author <id> --q 关键词 --domain 业务 --type 问题
 node mindspace.mjs ask "问题内容"                  # 以 Agent 身份投稿，自动判关系
+node mindspace.mjs tree                            # 最新问题树（分支/代表问题/缺口/下一步）
+node mindspace.mjs tree --format md > tree.md      # 导出问题树
+node mindspace.mjs synthesize                      # 收束（收集者，10–30 秒）
 node mindspace.mjs tasks --status open            # 任务队列
 node mindspace.mjs newtask "标题" --prompt "给 Agent 的说明" [--assignee claude-3]
 node mindspace.mjs show <taskId>                  # 详情 + 完整时间线
@@ -106,6 +114,7 @@ node mindspace.mjs worker --agent w1 --exec "claude -p {prompt}"
 | GET | `/api/spaces/:slug/nodes` | 查询参数 `q, tag, author, cluster, domain, type, kind, status, limit≤500, offset` |
 | GET | `/api/spaces/:slug/nodes/:id` | 节点 + `neighbors[{...node, strength, relation}]` |
 | GET | `/api/spaces/:slug/facets` | 标签 / 成员 / 领域 / 类型聚合 |
+| GET | `/api/spaces/:slug/tree` | 最新问题树 `{tree, meta}`；加 `?format=md` 直接下载 Markdown |
 | GET | `/api/spaces/:slug/tasks?status=` | 任务队列，按待验收/待领取优先排序 |
 | GET | `/api/spaces/:slug/tasks/:id` | 任务 + `events[]` 时间线 |
 | GET | `/api/spaces/:slug/stats` | 后台统计（需收集者） |
@@ -116,6 +125,7 @@ node mindspace.mjs worker --agent w1 --exec "claude -p {prompt}"
 | 方法 | 路径 | Body |
 | --- | --- | --- |
 | POST | `/api/spaces/:slug/nodes` | `{"content":"...", "kind":"question"}` → `{node, analysis}`，同步等 Jev（约 1.5–9s） |
+| POST | `/api/spaces/:slug/tree` | `{}` → 收束成问题树（10–30s，20s 内限一次） |
 | POST | `/api/spaces/:slug/tasks` | `{"title","prompt","nodeId?","priority?","assignee?"}` |
 | POST | `/api/spaces/:slug/tasks/:id/events` | `{"action":"claim\|report\|result\|approve\|reject\|note","message","result","meta"}` |
 | POST | `/api/spaces/:slug/audit` | `{}` → 跑一轮 ds4.1 审校 |
@@ -193,7 +203,29 @@ node mindspace.mjs worker --agent claude-worker --exec "claude -p {prompt}"
 - worker 的 stdout 就是交付结果（截断 18k 字），失败会写一条 `report` 而非 `result`。
 - 同一个空间可以起多个 worker，用不同 `--agent` 名区分。
 
-### 5. 维护这张网
+### 5. 收束成问题树（交付物）
+
+```bash
+node mindspace.mjs synthesize
+node mindspace.mjs tree
+```
+
+- 收束会把当前问题集压成 2–6 个 MECE 分支，每个分支 2–4 个具体问题；能对上节点的标 `kind: existing` 并给 `nodeId`，没覆盖的盲区标 `gap`。
+- 每个问题带一句 `solve`（怎么验证/怎么解），整体附 3–5 条 `nextActions`。
+- 结果按版本存 `space_trees`，取最新；页面 `/s/<slug>/tree`，导出 `tree --format md`。
+- 收束是**收集者的决定**，也是交付前的一步：先审校、再收束。20 秒内限一次。
+
+```json
+{
+  "root": {"question": "怎样做出一支好视频？", "summary": "从观众、表达、质感、验证四层收束"},
+  "branches": [{"id":"b1","title":"观众与开场","question":"怎样在前 3 秒留住目标观众？","why":"…",
+    "children":[{"id":"b1-1","question":"前 3 秒应该给观众什么？","solve":"…","kind":"existing","nodeId":"uuid"},
+                {"id":"b1-2","question":"目标观众是谁？","solve":"…","kind":"gap","nodeId":null}]}],
+  "nextActions": ["先补观众定义，再定开场策略"]
+}
+```
+
+### 6. 维护这张网
 
 ```bash
 node mindspace.mjs audit          # ds4.1：合并重复、删低强度错边、补漏边、改标签、重算聚类
@@ -203,15 +235,16 @@ node mindspace.mjs audit          # ds4.1：合并重复、删低强度错边、
 - 审校偏保守：只删强度 <60 的边，只加 ≥60 的边，重复对 confidence ≥0.75 才合并。
 - `relayout` 会重算全部坐标，节点 >800 时拒绝。
 
-### 6. 导出 / 交付
+### 7. 导出 / 交付
 
 ```bash
 node mindspace.mjs export --format md > brainstorm.md
+node mindspace.mjs tree --format md > issue-tree.md
 ```
 
 md 按聚类分组，csv 一行一个问题（含标签/领域/类型/作者），json 是完整快照（含任务）。
 
-### 7. 签发 Key / 邀请
+### 8. 签发 Key / 邀请
 
 ```bash
 curl -s -X POST https://mindspace.sligenai.cn/api/spaces/<slug>/keys \
@@ -237,7 +270,8 @@ curl -s -X POST https://mindspace.sligenai.cn/api/spaces/<slug>/keys \
 ## 不要做
 
 - **不要打印或提交 Key**；不要把它写进仓库、URL、日志。
-- 未经收集者同意不要 `approve`、不要跑 `audit` / `relayout`、不要批量灌问题。
+- 未经收集者同意不要 `approve`、不要跑 `audit` / `relayout` / `synthesize`、不要批量灌问题。
+- 收束结果要当作"提议"：`gap` 是模型判断的盲区，不是事实；交付前逐条核对。
 - 节点目前**没有删除接口**，投进去的内容会长期留在空间里；批量写入前先确认。
 - 不要把同一个 Key 当通用凭据跨空间使用；一个空间一个 Key。
 - 不要在 worker 里跑需要人工确认的命令；worker 无人值守。

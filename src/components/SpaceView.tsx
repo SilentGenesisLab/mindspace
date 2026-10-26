@@ -115,6 +115,12 @@ export default function SpaceView({ slug }: { slug: string }) {
     void Promise.all([loadSpace(), loadGraph(), loadFacets()]);
   }, [loadSpace, loadGraph, loadFacets]);
 
+  // 从问题树/列表点进来时，直接选中对应节点
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get('node');
+    if (id) setSelectedId(id);
+  }, []);
+
   // 实时：其它人的问题、审校结果
   useEffect(() => {
     const source = new EventSource(`/api/spaces/${slug}/stream`);
@@ -351,7 +357,10 @@ export default function SpaceView({ slug }: { slug: string }) {
           <button className="btn btn-sm mobile-toggle" onClick={() => setRailOpen((v) => !v)}>
             筛选
           </button>
-          <Link href={`/s/${slug}/list`} className="btn btn-sm">
+          <Link href={`/s/${slug}/tree`} className="btn btn-sm">
+            收束
+          </Link>
+          <Link href={`/s/${slug}/list`} className="btn btn-sm hide-mobile">
             列表
           </Link>
           {space?.canManage && (

@@ -162,6 +162,51 @@ async function main() {
       return;
     }
 
+    case 'tree': {
+      const slug = await spaceSlug();
+      if (flags.format === 'md') {
+        const res = await fetch(`${BASE}/api/spaces/${slug}/tree?format=md`, {
+          headers: { Authorization: `Bearer ${KEY}` },
+        });
+        if (!res.ok) die(await res.text());
+        process.stdout.write(await res.text());
+        return;
+      }
+      const data = await api(`/api/spaces/${slug}/tree`);
+      if (raw) return out(data);
+      if (!data.tree) {
+        console.log('还没有问题树。收集者可以运行: mindspace synthesize');
+        return;
+      }
+      const s = data.meta?.stats || {};
+      console.log(`${data.tree.root.question}`);
+      if (data.tree.root.summary) console.log(`  ${data.tree.root.summary}`);
+      console.log(`  ${s.branches ?? 0} 分支 / ${s.questions ?? 0} 问题 / ${s.gaps ?? 0} 缺口 · ${data.meta?.model}`);
+      data.tree.branches.forEach((b, i) => {
+        console.log(`\n${i + 1}. ${b.title} — ${b.question}`);
+        for (const c of b.children) {
+          console.log(`   ${c.kind === 'gap' ? '◌' : '•'} ${c.question}${c.solve ? `  ｜ ${c.solve}` : ''}`);
+        }
+      });
+      if (data.tree.nextActions?.length) {
+        console.log('\n下一步:');
+        data.tree.nextActions.forEach((a, i) => console.log(`  ${i + 1}) ${a}`));
+      }
+      return;
+    }
+
+    case 'synthesize': {
+      const slug = await spaceSlug();
+      console.log('收束中…（约 10–30 秒）');
+      const data = await api(`/api/spaces/${slug}/tree`, 'POST');
+      out(
+        raw
+          ? data
+          : `✔ 已生成问题树：${data.stats.branches} 分支 / ${data.stats.questions} 问题 / ${data.stats.gaps} 缺口 (${data.stats.model}, ${data.stats.ms}ms)`,
+      );
+      return;
+    }
+
     case 'newtask': {
       const slug = await spaceSlug();
       const title = positional.join(' ').trim() || flags.title;
@@ -356,6 +401,8 @@ async function main() {
   mindspace graph [--space slug]           看全图摘要
   mindspace nodes [--tag x] [--author id]  取问题
   mindspace ask "问题内容"                  以 Agent 身份投稿
+  mindspace tree [--format md]             查看收束后的问题树
+  mindspace synthesize                     把当前问题集收束成议题树（收集者）
   mindspace newtask "标题" --prompt "..."    创建任务（可 --assignee 指派）
   mindspace tasks [--status open]          任务队列
   mindspace show <taskId>                  任务详情与时间线

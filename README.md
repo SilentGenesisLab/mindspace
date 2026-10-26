@@ -19,7 +19,8 @@
 2. **布局**：新节点落在强邻居重心，局部力导松弛。弹簧静止长度 `100 - strength × 0.8`，所以关联越强距离越近。
 3. **聚类**：带权标签传播（边权 ≥ 30），≥3 个节点才单独成簇，Jev 给簇命名。
 4. **审校**：`deepseek/deepseek-v4.1-flash` 每 30 分钟（`AUDIT_INTERVAL_MIN`）处理最近变化的节点：合并重复、删除低强度错边、补漏边、纠正标签、重算聚类。应用策略保守：只删 <60 的边，只加 ≥60 的边。
-5. **实时**：SSE 推 `node.created` / `audit.completed` / `task.updated`。
+5. **收束**：收集者一键把当前问题集压成一棵面向解题的 MECE 议题树——2–6 个分支、每个分支下的代表问题与缺口、3–5 条下一步。能对上真实节点的标出来源，盲区标 `gap`；按版本存入 `space_trees`，可导出 Markdown。
+6. **实时**：SSE 推 `node.created` / `audit.completed` / `task.updated` / `tree.updated`。
 
 ## 技术栈
 
@@ -66,6 +67,8 @@ curl -fsSL https://mindspace.sligenai.cn/api/cli -o mindspace.mjs
 export MINDSPACE_URL=https://mindspace.sligenai.cn
 export MINDSPACE_KEY=ms_live_...
 node mindspace.mjs tasks --status open
+node mindspace.mjs synthesize                      # 收束成问题树（收集者）
+node mindspace.mjs tree --format md > tree.md
 node mindspace.mjs newtask "分析空态留存" --prompt "给出 3 个方案"
 node mindspace.mjs take <taskId> --agent claude-3
 node mindspace.mjs resolve <taskId> --file result.md
@@ -79,7 +82,7 @@ node mindspace.mjs worker --agent claude-worker --exec "claude -p {prompt}"
 ```
 src/app/            页面与 API 路由
 src/components/     3D 画布、空间视图、后台、列表
-src/lib/            analyze / graph / audit / tasks / auth / sms / llm
+src/lib/            analyze / graph / audit / tree / tasks / auth / sms / llm
 db/schema.sql       幂等 schema（migrate 脚本按序执行）
 cli/mindspace.mjs   零依赖 CLI（也可通过 /api/cli 下载）
 deploy/             systemd unit / nginx site / deploy.sh

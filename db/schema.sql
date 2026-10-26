@@ -152,3 +152,14 @@ create table if not exists space_events (
   created_at timestamptz not null default now()
 );
 create index if not exists space_events_space_idx on space_events (space_id, id desc);
+
+create table if not exists space_trees (
+  id uuid primary key default gen_random_uuid(),
+  space_id uuid not null references spaces(id) on delete cascade,
+  model text not null default '',
+  tree jsonb not null,
+  stats jsonb not null default '{}'::jsonb,
+  created_by uuid references users(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+create index if not exists space_trees_space_idx on space_trees (space_id, created_at desc);

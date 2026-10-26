@@ -256,6 +256,9 @@ export default function AdminDashboard({ slug }: { slug: string }) {
           <Link href={`/s/${slug}/list`} className="btn btn-sm">
             问题集
           </Link>
+          <Link href={`/s/${slug}/tree`} className="btn btn-sm">
+            问题树
+          </Link>
         </div>
       </nav>
 
