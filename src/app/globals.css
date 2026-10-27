@@ -2376,3 +2376,43 @@ button.pill.st-fail {
     width: calc(100% - 24px);
   }
 }
+
+/* 执行设置：模型选择 + 定时自动执行 */
+.board-exec {
+  margin-bottom: 14px;
+}
+.board-exec-row {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  gap: 22px;
+  align-items: start;
+}
+.board-exec-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.board-exec .input {
+  height: 34px;
+  font-size: 12.5px;
+}
+.board-exec .board-inline {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+.board-exec-hint {
+  font-size: 11.5px;
+  color: var(--dim);
+  line-height: 1.65;
+}
+.board-num {
+  width: 72px;
+  text-align: center;
+  font-family: var(--mono);
+}
+@media (max-width: 900px) {
+  .board-exec-row {
+    grid-template-columns: 1fr;
+  }
+}

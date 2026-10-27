@@ -2,7 +2,7 @@ import { one, q } from './db';
 import { chat, extractJson, LlmError } from './llm';
 import { publish } from './events';
 import { createTask } from './tasks';
-import { acceptanceList, autoReviewTask, runTaskHosted } from './execution';
+import { acceptanceList, autoReviewTask, runTaskHosted, RUN_MODEL } from './execution';
 import type { IssueTree } from './types';
 
 /**
@@ -11,7 +11,16 @@ import type { IssueTree } from './types';
  * 所以执行、验收、人工复核都落在同一条任务反馈链路里。
  */
 
-export type BoardHeader = { need: string; proposition: string; principles: string; kpi: string };
+export type BoardHeader = { need: string; proposition: string; principles: string; kpi: string; model: string };
+
+export type BoardAutomation = {
+  enabled: boolean;
+  interval_minutes: number;
+  max_attempts: number;
+  last_run_at: string | null;
+  last_result: Record<string, unknown> | null;
+  updated_at: string | null;
+};
 
 export type BoardSection = {
   id: string;
@@ -72,6 +81,7 @@ export function normalizeHeader(input: Partial<BoardHeader> | null | undefined):
     proposition: text(input?.proposition, 600),
     principles: text(input?.principles, 2000),
     kpi: text(input?.kpi, 1000),
+    model: text(input?.model, 120),
   };
 }
 
@@ -162,7 +172,6 @@ export async function getBoard(spaceId: string) {
   );
   const header = normalizeHeader(space?.board);
   if (!header.proposition && space?.direction) header.proposition = space.direction;
-
   const sections = await q<BoardSection>(
     `select id, parent_id, title, description, position, created_by
      from board_sections where space_id = $1 order by position asc, created_at asc`,
@@ -189,7 +198,40 @@ export async function getBoard(spaceId: string) {
     else stats.running++;
   }
 
-  return { header, sections, items: full, stats };
+  return { header, sections, items: full, stats, automation: await getAutomation(spaceId) };
+}
+
+export const AUTOMATION_DEFAULTS = { enabled: false, interval_minutes: 5, max_attempts: 3 };
+
+export async function getAutomation(spaceId: string): Promise<BoardAutomation> {
+  const row = await one<BoardAutomation>(
+    `select enabled, interval_minutes, max_attempts, last_run_at, last_result, updated_at
+     from board_automations where space_id = $1`,
+    [spaceId],
+  );
+  return row ?? { ...AUTOMATION_DEFAULTS, last_run_at: null, last_result: null, updated_at: null };
+}
+
+export async function saveAutomation(
+  spaceId: string,
+  input: { enabled?: boolean; intervalMinutes?: number; maxAttempts?: number },
+  updatedBy: string | null,
+) {
+  const current = await getAutomation(spaceId);
+  const interval = Math.min(1440, Math.max(1, Math.round(Number(input.intervalMinutes ?? current.interval_minutes) || 5)));
+  const attempts = Math.min(10, Math.max(1, Math.round(Number(input.maxAttempts ?? current.max_attempts) || 3)));
+  const enabled = typeof input.enabled === 'boolean' ? input.enabled : current.enabled;
+  const row = await one<BoardAutomation>(
+    `insert into board_automations (space_id, enabled, interval_minutes, max_attempts, updated_by)
+     values ($1, $2, $3, $4, $5)
+     on conflict (space_id) do update set
+       enabled = excluded.enabled, interval_minutes = excluded.interval_minutes,
+       max_attempts = excluded.max_attempts, updated_by = excluded.updated_by, updated_at = now()
+     returning enabled, interval_minutes, max_attempts, last_run_at, last_result, updated_at`,
+    [spaceId, enabled, interval, attempts, updatedBy],
+  );
+  publish(spaceId, 'board.updated', { part: 'automation' });
+  return row!;
 }
 
 export async function saveHeader(spaceId: string, input: Partial<BoardHeader>) {
@@ -385,7 +427,11 @@ async function sectionPath(spaceId: string, sectionId: string) {
 
 // 进程内执行队列：同一时刻最多 RUN_CONCURRENCY 个托管执行，避免一次点「全部执行」把模型打满。
 const globalForQueue = globalThis as unknown as {
-  __msBoardQueue?: { pending: Array<{ spaceId: string; taskId: string }>; running: Set<string>; active: number };
+  __msBoardQueue?: {
+    pending: Array<{ spaceId: string; taskId: string; model: string }>;
+    running: Set<string>;
+    active: number;
+  };
 };
 const queue = (globalForQueue.__msBoardQueue ??= { pending: [], running: new Set(), active: 0 });
 
@@ -393,7 +439,7 @@ function pump() {
   while (queue.active < RUN_CONCURRENCY && queue.pending.length) {
     const job = queue.pending.shift()!;
     queue.active++;
-    void executeAttempt(job.spaceId, job.taskId).finally(() => {
+    void executeAttempt(job.spaceId, job.taskId, job.model).finally(() => {
       queue.active--;
       queue.running.delete(job.taskId);
       pump();
@@ -401,9 +447,9 @@ function pump() {
   }
 }
 
-async function executeAttempt(spaceId: string, taskId: string) {
+async function executeAttempt(spaceId: string, taskId: string, model: string) {
   try {
-    await runTaskHosted({ spaceId, taskId, actorName: 'board-runner' });
+    await runTaskHosted({ spaceId, taskId, actorName: 'board-runner', model });
   } catch (err) {
     // 执行失败算这一次尝试失败，下次点执行会开新的一次
     await q(`update tasks set status = 'rejected', closed_at = now(), updated_at = now() where id = $1`, [taskId]);
@@ -473,7 +519,7 @@ function buildPrompt(opts: {
 }
 
 /** 「AI 执行」：为每个条目开一次新尝试，进队列跑，跑完自动交给验收 Agent。 */
-export async function runItems(opts: { spaceId: string; itemIds: string[]; createdBy: string | null }) {
+export async function runItems(opts: { spaceId: string; itemIds: string[]; createdBy: string | null; model?: string }) {
   const space = await one<{ title: string; direction: string; board: Partial<BoardHeader> }>(
     'select title, direction, board from spaces where id = $1',
     [opts.spaceId],
@@ -481,6 +527,7 @@ export async function runItems(opts: { spaceId: string; itemIds: string[]; creat
   if (!space) throw new Error('空间不存在');
   const header = normalizeHeader(space.board);
   if (!header.proposition) header.proposition = space.direction;
+  const model = (opts.model || header.model || RUN_MODEL()).trim().slice(0, 120);
 
   const ids = [...new Set(opts.itemIds)].slice(0, 50);
   const items = await q<ItemContext>(
@@ -529,10 +576,11 @@ export async function runItems(opts: { spaceId: string; itemIds: string[]; creat
         proposition: header.proposition,
         branchTitle: path.map((p) => p.title).join(' › '),
         acceptance: acceptanceList(item.acceptance),
+        model,
       },
     });
     queue.running.add(task.id);
-    queue.pending.push({ spaceId: opts.spaceId, taskId: task.id });
+    queue.pending.push({ spaceId: opts.spaceId, taskId: task.id, model });
     started.push({ itemId: item.id, taskId: task.id, attempt: previous.length + 1 });
   }
 

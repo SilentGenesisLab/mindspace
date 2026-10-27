@@ -8,10 +8,18 @@ export async function POST(req: Request, { params }: { params: Promise<{ slug: s
     const { slug } = await params;
     const { actor, space } = await requireSpaceActor(req, slug, { manage: true });
     if (!rateLimit(`board-run:${space.id}`, 10, 60_000)) return json({ error: '执行请求太频繁，等一分钟' }, { status: 429 });
-    const body = (await req.json().catch(() => ({}))) as { itemIds?: unknown };
+    const body = (await req.json().catch(() => ({}))) as { itemIds?: unknown; model?: unknown };
     const itemIds = Array.isArray(body.itemIds) ? body.itemIds.filter((v): v is string => typeof v === 'string') : [];
     if (!itemIds.length) return json({ error: '没有选中条目' }, { status: 400 });
-    return json(await runItems({ spaceId: space.id, itemIds, createdBy: await actorAuthorId(actor, space.id) }));
+    const model = typeof body.model === 'string' ? body.model.trim().slice(0, 120) : '';
+    return json(
+      await runItems({
+        spaceId: space.id,
+        itemIds,
+        createdBy: await actorAuthorId(actor, space.id),
+        model: model || undefined,
+      }),
+    );
   } catch (err) {
     return fail(err);
   }

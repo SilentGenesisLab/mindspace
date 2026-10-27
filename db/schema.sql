@@ -209,3 +209,16 @@ create index if not exists board_items_section_idx on board_items (space_id, sec
 
 alter table tasks add column if not exists board_item_id uuid references board_items(id) on delete set null;
 create index if not exists tasks_board_item_idx on tasks (board_item_id, created_at);
+
+-- 表单自动执行：按分钟间隔挑「未开始 / 未通过且次数没用完」的条目跑 AI + 验收。
+create table if not exists board_automations (
+  space_id uuid primary key references spaces(id) on delete cascade,
+  enabled boolean not null default false,
+  interval_minutes int not null default 5,
+  max_attempts int not null default 3,
+  last_run_at timestamptz,
+  last_result jsonb,
+  updated_by uuid references users(id) on delete set null,
+  updated_at timestamptz not null default now()
+);
+create index if not exists board_automations_due_idx on board_automations (last_run_at) where enabled;

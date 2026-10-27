@@ -6,7 +6,7 @@ import type { IssueTree } from './types';
 
 // 默认走地区可达的模型；Anthropic 模型在部分区域会被 OpenRouter 拒绝，
 // 需要时用 RUN_MODEL / REVIEW_MODEL 显式覆盖。
-const RUN_MODEL = () => process.env.RUN_MODEL || 'deepseek/deepseek-v4.1-flash';
+export const RUN_MODEL = () => process.env.RUN_MODEL || 'deepseek/deepseek-v4.1-flash';
 const REVIEW_MODEL = () => process.env.REVIEW_MODEL || 'z-ai/glm-5.3-flash';
 
 type ItemTaskRow = {
@@ -302,16 +302,22 @@ ${ctx.result.slice(0, 8000)}
       },
     ],
     // 默认验收模型是推理模型：max_tokens 太小会被 reasoning 吃光，content 为空
-    { model, json: true, maxTokens: 3500, temperature: 0.1, timeoutMs: 90_000, title: 'Mindspace auto review' },
+    { model, json: true, maxTokens: 4000, temperature: 0.1, timeoutMs: 90_000, title: 'Mindspace auto review' },
   );
 
-  const parsed = extractJson<{
+  let parsed = extractJson<{
     score?: number;
     decision?: string;
     reasons?: unknown[];
     missing?: unknown[];
     checks?: unknown[];
   }>(result.text);
+  // 输出被截断时兜底：评分和结论通常已经写出来了
+  if (!parsed) {
+    const score = /"score"\s*:\s*(-?\d+)/.exec(result.text);
+    const decision = /"decision"\s*:\s*"(approve|reject)"/.exec(result.text);
+    if (score && decision) parsed = { score: Number(score[1]), decision: decision[1], reasons: [], missing: [], checks: [] };
+  }
   if (!parsed) throw new LlmError('验收结果无法解析');
 
   const score = Math.max(0, Math.min(100, Math.round(Number(parsed.score) || 0)));

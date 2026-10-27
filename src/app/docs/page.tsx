@@ -63,7 +63,16 @@ curl -X POST -H "Authorization: Bearer $MINDSPACE_KEY" -H 'Content-Type: applica
 
 # 看这次尝试的结果、评分、每条验收标准是否满足
 curl -H "Authorization: Bearer $MINDSPACE_KEY" \\
-  $MINDSPACE_URL/api/spaces/:slug/board/items/:id`;
+  $MINDSPACE_URL/api/spaces/:slug/board/items/:id
+
+# 切执行模型（也可以填任意 OpenRouter model id）
+curl -X PUT -H "Authorization: Bearer $MINDSPACE_KEY" -H 'Content-Type: application/json' \\
+  -d '{"model":"z-ai/glm-5.3-flash"}' $MINDSPACE_URL/api/spaces/:slug/board
+
+# 每 5 分钟自动跑一轮；最多试 3 次
+curl -X PUT -H "Authorization: Bearer $MINDSPACE_KEY" -H 'Content-Type: application/json' \\
+  -d '{"enabled":true,"intervalMinutes":5,"maxAttempts":3}' \\
+  $MINDSPACE_URL/api/spaces/:slug/board/auto`;
 
 const api = `GET    /api/spaces/:slug/graph
 GET    /api/spaces/:slug/nodes?q=&tag=&author=&domain=&type=
@@ -82,7 +91,10 @@ GET    /api/spaces/:slug/tree?format=md   # 导出问题树
 GET    /api/spaces/:slug/ops              # 运维快照
 POST   /api/spaces/:slug/audit
 GET    /api/spaces/:slug/board            # 表单：表头 + 分支 + 条目 + 每次尝试（?format=csv 导出）
-PUT    /api/spaces/:slug/board            { "need": "...", "proposition": "...", "principles": "...", "kpi": "..." }
+PUT    /api/spaces/:slug/board            { "need": "...", "proposition": "...", "principles": "...", "kpi": "...",
+                                            "model": "deepseek/deepseek-v4.1-flash|z-ai/glm-5.3-flash|..." }
+PUT    /api/spaces/:slug/board/auto       { "enabled": true, "intervalMinutes": 5, "maxAttempts": 3 }
+POST   /api/spaces/:slug/board/auto/run   # 不等定时，立刻跑一轮
 POST   /api/spaces/:slug/board/sections   { "title": "...", "parentId": null }
 POST   /api/spaces/:slug/board/items      { "sectionId": "...", "raw": "...", "acceptance": "..." }
 GET    /api/spaces/:slug/board/items/:id  # 条目 + 每次尝试的结果、评分、验收标准逐条判定、时间线
@@ -187,6 +199,12 @@ export default function DocsPage() {
           这会开一次带 <code>board_item_id</code> 的新尝试，执行完自动交给验收 Agent，按验收标准逐条判定，
           通过就落「已通过」，不通过就落「未通过」并写明缺什么；再点一次执行，上一轮的缺口会写进新 prompt。
           第一/二/三次尝试、评分和理由都留在同一条任务反馈链路里，也能一键导出 CSV。
+        </p>
+        <p>
+          表头下面有一栏执行设置：<strong>执行模型</strong>可以按板切换（下拉里是已验证的模型，也可以填任意
+          OpenRouter model id）；<strong>自动执行</strong>打开后，服务端每 N 分钟（默认 5）挑一批「未开始」和
+          「未通过且没试满 N 次」的条目自动跑 AI + 验收，每轮最多 10 条，同一时刻只处理一块板。
+          参数存在数据库里，重启不丢；「立即跑一轮」可以不等定时。
         </p>
         <pre>
           <code>{boardCmd}</code>

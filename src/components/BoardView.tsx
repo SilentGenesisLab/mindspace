@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Brand } from './Brand';
 
-type Header = { need: string; proposition: string; principles: string; kpi: string };
+type Header = { need: string; proposition: string; principles: string; kpi: string; model: string };
 type Section = { id: string; parent_id: string | null; title: string; description: string; position: number };
 type Check = { criterion: string; pass: boolean; note: string };
 type Attempt = {
@@ -36,11 +36,20 @@ type Item = {
   attempts: Attempt[];
   state: ItemState;
 };
+type Automation = {
+  enabled: boolean;
+  interval_minutes: number;
+  max_attempts: number;
+  last_run_at: string | null;
+  last_result: Record<string, unknown> | null;
+  updated_at: string | null;
+};
 type Board = {
   header: Header;
   sections: Section[];
   items: Item[];
   stats: { items: number; passed: number; failed: number; running: number; todo: number };
+  automation: Automation;
   canManage: boolean;
 };
 type DetailAttempt = Attempt & {
@@ -59,12 +68,33 @@ const STATE: Record<ItemState, { label: string; cls: string }> = {
   failed: { label: '未通过', cls: 'st-fail' },
 };
 
-const HEADER_FIELDS: Array<{ key: keyof Header; label: string; hint: string }> = [
+const HEADER_FIELDS: Array<{ key: 'need' | 'proposition' | 'principles' | 'kpi'; label: string; hint: string }> = [
   { key: 'need', label: '核心需求', hint: '这一轮到底要解决谁的什么问题' },
   { key: 'proposition', label: '当前核心命题', hint: '一句话写清楚要回答的命题' },
   { key: 'principles', label: '提问和验收原则', hint: '例如：问题要能落到动作；验收看能不能直接用' },
   { key: 'kpi', label: '核心 KPI', hint: '怎样算这一轮做成了' },
 ];
+
+// 只列已经在这套部署里验证过的模型；其它模型填自定义 ID 即可
+const MODELS = [
+  { id: 'deepseek/deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash · 快' },
+  { id: 'z-ai/glm-5.3-flash', label: 'GLM 5.3 Flash · 推理' },
+];
+
+function modelLabel(id: string) {
+  if (!id) return '默认模型';
+  return MODELS.find((m) => m.id === id)?.label ?? id;
+}
+
+function automationSummary(a: Automation) {
+  if (!a.last_run_at) return '还没自动跑过';
+  let extra = '';
+  const result = a.last_result ?? {};
+  if (typeof result.started === 'number') {
+    extra = result.started ? ` · 起 ${result.started} 条` : ' · 没有可跑的条目';
+  }
+  return `上次 ${new Date(a.last_run_at).toLocaleString('zh-CN')}${extra}`;
+}
 
 function attemptLabel(a: Attempt) {
   if (a.status === 'approved') return `✓ ${a.score ?? ''}`;
@@ -89,7 +119,7 @@ function criteriaLines(text: string) {
 
 export default function BoardView({ slug, title, meId }: { slug: string; title: string; meId: string }) {
   const [board, setBoard] = useState<Board | null>(null);
-  const [header, setHeader] = useState<Header>({ need: '', proposition: '', principles: '', kpi: '' });
+  const [header, setHeader] = useState<Header>({ need: '', proposition: '', principles: '', kpi: '', model: '' });
   const [filter, setFilter] = useState<'all' | ItemState | 'active'>('all');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState('');
@@ -98,9 +128,19 @@ export default function BoardView({ slug, title, meId }: { slug: string; title: 
   const [adding, setAdding] = useState<{ sectionId: string; raw: string; acceptance: string; urgency: string } | null>(null);
   const [newSection, setNewSection] = useState<{ parentId: string | null; title: string } | null>(null);
   const [openItem, setOpenItem] = useState<string | null>(null);
+  const [modelCustom, setModelCustom] = useState(false);
+  const [auto, setAuto] = useState<Automation>({
+    enabled: false,
+    interval_minutes: 5,
+    max_attempts: 3,
+    last_run_at: null,
+    last_result: null,
+    updated_at: null,
+  });
   const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 正在编辑表头时，实时刷新不能把输入框冲掉
   const headerDirty = useRef(false);
+  const autoDirty = useRef(false);
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/spaces/${slug}/board`, { cache: 'no-store' });
@@ -108,6 +148,7 @@ export default function BoardView({ slug, title, meId }: { slug: string; title: 
     const data = (await res.json()) as Board;
     setBoard(data);
     setHeader((prev) => (headerDirty.current ? prev : data.header));
+    if (data.automation) setAuto((prev) => (autoDirty.current ? prev : data.automation));
   }, [slug]);
 
   const scheduleReload = useCallback(() => {
@@ -162,6 +203,7 @@ export default function BoardView({ slug, title, meId }: { slug: string; title: 
   }
 
   const canManage = board?.canManage ?? false;
+  const showCustomModel = modelCustom || (header.model !== '' && !MODELS.some((m) => m.id === header.model));
 
   // 分支按层级展开成有序列表
   const ordered = useMemo(() => {
@@ -224,6 +266,38 @@ export default function BoardView({ slug, title, meId }: { slug: string; title: 
       await call('/board', 'PUT', header);
       headerDirty.current = false;
       flash(true, '表头已保存');
+    });
+  }
+
+  async function saveModel(next: string) {
+    const payload = { ...header, model: next };
+    setHeader(payload);
+    headerDirty.current = false;
+    await act('model', async () => {
+      await call('/board', 'PUT', payload);
+      flash(true, next ? `执行模型：${modelLabel(next)}` : '执行模型已恢复默认');
+    });
+  }
+
+  async function saveAuto(patch: { enabled?: boolean; intervalMinutes?: number; maxAttempts?: number }, note: string) {
+    await act('auto', async () => {
+      const data = await call('/board/auto', 'PUT', patch);
+      autoDirty.current = false;
+      setAuto(data.automation as Automation);
+      flash(true, note);
+    });
+  }
+
+  async function runAutoNow() {
+    await act('auto-run', async () => {
+      const data = await call('/board/auto/run', 'POST');
+      flash(
+        true,
+        data.started
+          ? `已排 ${data.started} 条，执行完自动验收${data.skipped ? `；跳过 ${data.skipped} 条` : ''}`
+          : data.reason || '没有可执行的条目',
+      );
+      await load();
     });
   }
 
@@ -387,6 +461,109 @@ export default function BoardView({ slug, title, meId }: { slug: string; title: 
               )}
             </label>
           ))}
+        </div>
+      </section>
+
+      <section className="card pad board-exec">
+        <div className="board-exec-row">
+          <label className="board-exec-field">
+            <span className="field-label">执行模型</span>
+            {canManage ? (
+              <div className="board-inline" style={{ marginTop: 0 }}>
+                <select
+                  className="input"
+                  value={showCustomModel ? '__custom' : header.model}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value === '__custom') {
+                      setModelCustom(true);
+                      return;
+                    }
+                    setModelCustom(false);
+                    void saveModel(value);
+                  }}
+                  disabled={busy === 'model'}
+                >
+                  <option value="">默认（{modelLabel('')}）</option>
+                  {MODELS.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                  <option value="__custom">自定义模型 ID…</option>
+                </select>
+                {showCustomModel && (
+                  <input
+                    className="input"
+                    style={{ minWidth: 220 }}
+                    value={header.model}
+                    placeholder="例如 openrouter 上的 model id"
+                    onChange={(e) => {
+                      headerDirty.current = true;
+                      setHeader((prev) => ({ ...prev, model: e.target.value }));
+                    }}
+                    onBlur={() => void saveHeader()}
+                  />
+                )}
+              </div>
+            ) : (
+              <div className="board-field-static">{modelLabel(header.model)}</div>
+            )}
+          </label>
+
+          <div className="board-exec-field">
+            <span className="field-label">自动执行</span>
+            {canManage ? (
+              <div className="board-inline" style={{ marginTop: 0 }}>
+                <button
+                  className={`chip${auto.enabled ? ' on' : ''}`}
+                  onClick={() => void saveAuto({ enabled: !auto.enabled }, auto.enabled ? '已暂停自动执行' : '自动执行已开启')}
+                  disabled={busy === 'auto'}
+                >
+                  {auto.enabled ? '已开启' : '已关闭'}
+                </button>
+                <span className="dim">每</span>
+                <input
+                  className="input board-num"
+                  type="number"
+                  min={1}
+                  max={1440}
+                  value={auto.interval_minutes}
+                  onChange={(e) => {
+                    autoDirty.current = true;
+                    setAuto((prev) => ({ ...prev, interval_minutes: Number(e.target.value) }));
+                  }}
+                  onBlur={() => void saveAuto({ intervalMinutes: auto.interval_minutes }, '间隔已保存')}
+                />
+                <span className="dim">分钟</span>
+                <span className="dim">· 每条最多试</span>
+                <input
+                  className="input board-num"
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={auto.max_attempts}
+                  onChange={(e) => {
+                    autoDirty.current = true;
+                    setAuto((prev) => ({ ...prev, max_attempts: Number(e.target.value) }));
+                  }}
+                  onBlur={() => void saveAuto({ maxAttempts: auto.max_attempts }, '次数上限已保存')}
+                />
+                <span className="dim">次</span>
+                <button className="btn btn-sm" onClick={() => void runAutoNow()} disabled={busy === 'auto-run'}>
+                  {busy === 'auto-run' ? '排队中…' : '立即跑一轮'}
+                </button>
+              </div>
+            ) : (
+              <div className="board-field-static">
+                {auto.enabled ? `每 ${auto.interval_minutes} 分钟自动执行` : '未开启'}
+              </div>
+            )}
+            <span className="board-exec-hint">
+              自动执行只挑「未开始」和「未通过且没试满 {auto.max_attempts} 次」的条目，最多 10 条一轮；
+              执行完照常交给验收 Agent。{automationSummary(auto)}
+            </span>
+          </div>
         </div>
       </section>
 

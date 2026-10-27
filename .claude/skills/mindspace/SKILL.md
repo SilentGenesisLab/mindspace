@@ -147,12 +147,14 @@ node mindspace.mjs worker --agent w1 --exec "claude -p {prompt}"
 | DELETE | `/api/spaces/:slug/keys?id=` | 撤销 Key |
 | POST | `/api/spaces/:slug/invite` | 重置邀请码 → `{invite_code,url}` |
 | GET | `/api/spaces/:slug/export?format=` | `json` / `csv` / `md` |
-| PUT | `/api/spaces/:slug/board` | `{"need","proposition","principles","kpi"}` → 表头（需收集者/Key） |
+| PUT | `/api/spaces/:slug/board` | `{"need","proposition","principles","kpi","model"}` → 表头（需收集者/Key）；`model` 是本板的执行模型 |
 | POST | `/api/spaces/:slug/board/sections` | `{"title","description?","parentId?":null}` → `{section}`；最多三层 |
 | PATCH/DELETE | `/api/spaces/:slug/board/sections/:id` | `{"title?","description?","position?"}`；删除会连带条目 |
 | POST | `/api/spaces/:slug/board/items` | `{"sectionId","raw","acceptance?","urgency?":"P0\|P1\|P2","rewrite?","feedback?"}` → `{item}` |
 | PATCH/DELETE | `/api/spaces/:slug/board/items/:id` | 同字段；作者本人或收集者 |
-| POST | `/api/spaces/:slug/board/run` | `{"itemIds":["..."]}` → `{started,skipped}`；开新一轮尝试，队列并发 2，跑完自动验收 |
+| POST | `/api/spaces/:slug/board/run` | `{"itemIds":["..."],"model?":"..."}` → `{started,skipped}`；开新一轮尝试，队列并发 2，跑完自动验收 |
+| PUT | `/api/spaces/:slug/board/auto` | `{"enabled","intervalMinutes":5,"maxAttempts":3}` → `{automation}`；定时自动执行 |
+| POST | `/api/spaces/:slug/board/auto/run` | 立刻跑一轮自动执行 → `{started,skipped}` |
 | POST | `/api/spaces/:slug/board/items/:id/review` | 对最近一次 `submitted` 尝试跑验收 Agent（外部 Agent 交付后用） |
 | POST | `/api/spaces/:slug/board/rewrite` | `{"itemIds":["..."]}` → `{updated}`；写 rewrite，只补空的 acceptance |
 | POST | `/api/spaces/:slug/board/import` | 最新问题树 → 表单（分支去重、问题按原文去重） |
@@ -280,6 +282,15 @@ curl -X POST -H "Authorization: Bearer $MINDSPACE_KEY" -H 'Content-Type: applica
 - 托管执行后自动验收：验收 Agent 逐条判定 acceptance，`score ≥ 70` 且全部通过才落 `approved`，否则落 `rejected` 并记录 `missing`；下一次执行的 prompt 会带上上一轮缺口。
 - 已通过的条目默认不再重复派；先 `PATCH` 改验收标准再 `run`，或删掉重建。
 - 只能对 `submitted` 的尝试重跑验收；执行中断（服务重启）的下次 `run` 会先把旧尝试标成「执行失败」。
+
+**换执行模型**：`PUT /board {"model":"z-ai/glm-5.3-flash"}`（或页面上的「执行模型」下拉）。空字符串表示回到 `RUN_MODEL`；任意 OpenRouter model id 都可以填，但 Anthropic 模型在部分区域会被上游拒绝。模型记在 `spaces.board.model`，每次 `run` 都会把它写进任务 `context.model`，跑的时候用的就是这个。
+
+**定时自动执行**：`PUT /board/auto {"enabled":true,"intervalMinutes":5,"maxAttempts":3}`。
+
+- 服务端每 30 秒检查一次到点的板，间隔从 1 到 1440 分钟，参数落库（`board_automations`），重启不丢。
+- 每轮只挑「未开始」和「未通过且尝试次数 < maxAttempts」的条目，最多 10 条；同一时刻只处理一块板，执行仍走并发 2 的队列。
+- 跑完照常自动验收；通过即停，不通过就在下一轮继续，直到试满次数。
+- `POST /board/auto/run` 可以立刻跑一轮（未开启也能用），限 1 分钟 3 次。
 
 ### 7. 持续运维
 
