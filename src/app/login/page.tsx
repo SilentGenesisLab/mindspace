@@ -21,7 +21,7 @@ export default async function LoginPage({
       <div className="auth-card">
         <Brand />
         <h1>进入思维空间</h1>
-        <p className="auth-sub">用手机号登录。第一次登录会自动创建账号。</p>
+        <p className="auth-sub">验证码或密码登录。第一次用验证码登录会自动创建账号。</p>
         <AuthForm next={next} />
         <div className="auth-note">
           登录即表示你同意：你在空间里提交的问题和标签会被同一空间的成员看到，并用于关系计算。

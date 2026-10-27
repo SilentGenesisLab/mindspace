@@ -480,6 +480,34 @@ textarea.input {
   margin-top: 8px;
   margin-bottom: 26px;
 }
+.auth-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(4, 8, 16, 0.5);
+}
+.auth-tabs button {
+  height: 34px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13.5px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.auth-tabs button:hover {
+  color: var(--fg);
+}
+.auth-tabs button.on {
+  background: rgba(62, 240, 176, 0.12);
+  color: var(--act);
+  font-weight: 600;
+}
 .auth-row {
   display: flex;
   gap: 10px;

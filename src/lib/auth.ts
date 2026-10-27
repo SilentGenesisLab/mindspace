@@ -35,33 +35,61 @@ function secret(): Uint8Array {
   return new TextEncoder().encode(value);
 }
 
-export async function signSession(userId: string): Promise<string> {
-  return new SignJWT({ uid: userId })
+/** 会话 90 天；活跃用户每 7 天自动续一次，常用设备基本不会再被要求登录。 */
+const SESSION_DAYS = 90;
+const REFRESH_AFTER_SECONDS = 60 * 60 * 24 * 7;
+
+export type SessionMethod = 'otp' | 'password' | 'refresh';
+export type SessionPayload = { uid: string; method: SessionMethod; iat: number };
+
+export async function signSession(userId: string, method: SessionMethod = 'otp'): Promise<string> {
+  return new SignJWT({ uid: userId, m: method })
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
-    .setExpirationTime('30d')
+    .setExpirationTime(`${SESSION_DAYS}d`)
     .sign(secret());
 }
 
-export async function userIdFromToken(token: string | undefined | null): Promise<string | null> {
+export async function sessionFromToken(token: string | undefined | null): Promise<SessionPayload | null> {
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, secret());
-    return typeof payload.uid === 'string' ? payload.uid : null;
+    if (typeof payload.uid !== 'string') return null;
+    const method = payload.m === 'password' || payload.m === 'refresh' ? payload.m : 'otp';
+    return { uid: payload.uid, method, iat: Number(payload.iat) || 0 };
   } catch {
     return null;
   }
 }
 
-export async function setSessionCookie(userId: string) {
+export async function userIdFromToken(token: string | undefined | null): Promise<string | null> {
+  return (await sessionFromToken(token))?.uid ?? null;
+}
+
+export async function setSessionCookie(userId: string, method: SessionMethod = 'otp') {
   const jar = await cookies();
-  jar.set(SESSION_COOKIE, await signSession(userId), {
+  jar.set(SESSION_COOKIE, await signSession(userId, method), {
     httpOnly: true,
     sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
     path: '/',
-    maxAge: 60 * 60 * 24 * 30,
+    maxAge: 60 * 60 * 24 * SESSION_DAYS,
   });
+}
+
+/** 当前浏览器会话（含登录方式与签发时间），用于续期和"刚用验证码登录可直接改密码"。 */
+export async function currentSession(): Promise<SessionPayload | null> {
+  const jar = await cookies();
+  return sessionFromToken(jar.get(SESSION_COOKIE)?.value);
+}
+
+/** 签发超过 7 天就换一张新的 90 天会话，保留原登录方式。 */
+export async function refreshSessionIfStale(session: SessionPayload): Promise<boolean> {
+  const age = Math.floor(Date.now() / 1000) - session.iat;
+  if (age < REFRESH_AFTER_SECONDS) return false;
+  // 续期后的会话不再算"刚用验证码登录"，免得改密码的窗口被无限延长
+  await setSessionCookie(session.uid, session.method === 'otp' ? 'refresh' : session.method);
+  return true;
 }
 
 export async function clearSessionCookie() {

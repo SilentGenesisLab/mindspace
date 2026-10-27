@@ -29,6 +29,47 @@ export default function SpacesClient({ user }: { user: User }) {
   const [direction, setDirection] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [pwdOpen, setPwdOpen] = useState(false);
+  const [pwdInfo, setPwdInfo] = useState<{ hasPassword: boolean; canSetWithoutCurrent: boolean } | null>(null);
+  const [currentPwd, setCurrentPwd] = useState('');
+  const [nextPwd, setNextPwd] = useState('');
+  const [pwdMsg, setPwdMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [pwdBusy, setPwdBusy] = useState(false);
+
+  async function openPassword() {
+    setPwdOpen(true);
+    setPwdMsg(null);
+    setCurrentPwd('');
+    setNextPwd('');
+    const res = await fetch('/api/auth/me', { cache: 'no-store' });
+    if (res.ok) {
+      const data = await res.json();
+      setPwdInfo({ hasPassword: Boolean(data.hasPassword), canSetWithoutCurrent: Boolean(data.canSetWithoutCurrent) });
+    }
+  }
+
+  async function savePassword() {
+    setPwdBusy(true);
+    setPwdMsg(null);
+    try {
+      const res = await fetch('/api/auth/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: nextPwd, currentPassword: currentPwd }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '保存失败');
+      localStorage.setItem('ms:last-mode', 'password');
+      setPwdMsg({ ok: true, text: '密码已保存，下次可以直接用手机号 + 密码登录' });
+      setPwdInfo((prev) => (prev ? { ...prev, hasPassword: true } : prev));
+      setCurrentPwd('');
+      setNextPwd('');
+    } catch (err) {
+      setPwdMsg({ ok: false, text: err instanceof Error ? err.message : '保存失败' });
+    } finally {
+      setPwdBusy(false);
+    }
+  }
 
   const load = useCallback(async () => {
     const res = await fetch('/api/spaces');
@@ -65,7 +106,8 @@ export default function SpacesClient({ user }: { user: User }) {
 
   async function logout() {
     await fetch('/api/auth/logout', { method: 'POST' });
-    router.push('/');
+    sessionStorage.removeItem('ms:session-touched');
+    router.push('/login');
     router.refresh();
   }
 
@@ -81,6 +123,9 @@ export default function SpacesClient({ user }: { user: User }) {
             <Avatar name={user.nickname} color={user.color} size={24} />
             <span style={{ color: 'var(--fg)' }}>{user.nickname}</span>
           </span>
+          <button className="btn btn-ghost btn-sm" onClick={() => void openPassword()}>
+            登录密码
+          </button>
           <button className="btn btn-ghost btn-sm" onClick={logout}>
             退出
           </button>
@@ -167,6 +212,59 @@ export default function SpacesClient({ user }: { user: User }) {
               </div>
             </Link>
           ))}
+        </div>
+      )}
+
+      {pwdOpen && (
+        <div className="modal-backdrop" onClick={() => setPwdOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>{pwdInfo?.hasPassword ? '修改登录密码' : '设置登录密码'}</h2>
+            <p className="sub">设置后可以用「手机号 + 密码」登录，不用每次收验证码。</p>
+
+            {pwdInfo?.hasPassword && !pwdInfo.canSetWithoutCurrent && (
+              <div style={{ marginTop: 14 }}>
+                <label className="field-label">当前密码</label>
+                <input
+                  type="password"
+                  className="input"
+                  autoComplete="current-password"
+                  value={currentPwd}
+                  onChange={(e) => setCurrentPwd(e.target.value)}
+                />
+              </div>
+            )}
+            {pwdInfo?.hasPassword && pwdInfo.canSetWithoutCurrent && (
+              <p className="dim" style={{ fontSize: 12, marginTop: 10 }}>
+                你刚用验证码登录，可以直接重设，不需要旧密码。
+              </p>
+            )}
+
+            <div style={{ marginTop: 14 }}>
+              <label className="field-label">新密码</label>
+              <input
+                type="password"
+                className="input"
+                autoComplete="new-password"
+                placeholder="8 位以上，含字母和数字"
+                value={nextPwd}
+                onChange={(e) => setNextPwd(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void savePassword();
+                }}
+              />
+            </div>
+
+            {pwdMsg && <div className={pwdMsg.ok ? 'auth-ok' : 'auth-error'}>{pwdMsg.text}</div>}
+
+            <div className="modal-actions">
+              <button className="btn btn-ghost" onClick={() => setPwdOpen(false)}>
+                关闭
+              </button>
+              <button className="btn btn-primary" onClick={savePassword} disabled={pwdBusy || nextPwd.length < 8}>
+                {pwdBusy ? '保存中…' : '保存'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

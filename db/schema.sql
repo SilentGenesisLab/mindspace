@@ -170,3 +170,6 @@ alter table tasks add column if not exists context jsonb not null default '{}'::
 alter table tasks add column if not exists started_at timestamptz;
 alter table tasks add column if not exists executor text;
 create index if not exists tasks_tree_idx on tasks (space_id, tree_id, tree_item_id);
+
+alter table users add column if not exists password_hash text;
+alter table users add column if not exists password_set_at timestamptz;

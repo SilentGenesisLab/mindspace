@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { Brand } from '@/components/Brand';
 import { getSessionUser } from '@/lib/auth';
 
@@ -74,8 +75,14 @@ function HeroGraph() {
   );
 }
 
-export default async function LandingPage() {
+export default async function LandingPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ home?: string }>;
+}) {
   const user = await getSessionUser();
+  // 登录过的直接进工作区；?home=1 仍可回看介绍页
+  if (user && (await searchParams).home !== '1') redirect('/app');
 
   return (
     <main>

@@ -2,14 +2,26 @@ import { one, q } from '@/lib/db';
 import { setSessionCookie, type User } from '@/lib/auth';
 import { fail, json, rateLimit, clientIp } from '@/lib/http';
 import { CLUSTER_COLORS } from '@/lib/graph';
+import { hashPassword, passwordProblem } from '@/lib/password';
 
 export async function POST(req: Request) {
   try {
-    const body = (await req.json().catch(() => ({}))) as { phone?: string; code?: string; nickname?: string };
+    const body = (await req.json().catch(() => ({}))) as {
+      phone?: string;
+      code?: string;
+      nickname?: string;
+      password?: string;
+    };
     const phone = String(body.phone ?? '').trim();
     const code = String(body.code ?? '').trim();
+    const password = String(body.password ?? '');
     if (!/^1[3-9]\d{9}$/.test(phone)) return json({ error: '手机号格式不对' }, { status: 400 });
     if (!/^\d{6}$/.test(code)) return json({ error: '验证码是 6 位数字' }, { status: 400 });
+    // 验证码本身证明了手机号归属，所以顺带设密码 / 重置密码都在这里完成
+    if (password) {
+      const problem = passwordProblem(password);
+      if (problem) return json({ error: problem }, { status: 400 });
+    }
 
     const ip = clientIp(req);
     if (!rateLimit(`verify:ip:${ip}`, 30, 900_000)) return json({ error: '尝试过于频繁，请稍后再试' }, { status: 429 });
@@ -46,8 +58,18 @@ export async function POST(req: Request) {
     }
     if (!user) return json({ error: '创建用户失败' }, { status: 500 });
 
-    await setSessionCookie(user.id);
-    return json({ user: { id: user.id, phone: user.phone, nickname: user.nickname, color: user.color } });
+    if (password) {
+      await q('update users set password_hash = $2, password_set_at = now() where id = $1', [
+        user.id,
+        await hashPassword(password),
+      ]);
+    }
+
+    await setSessionCookie(user.id, 'otp');
+    return json({
+      user: { id: user.id, phone: user.phone, nickname: user.nickname, color: user.color },
+      passwordSet: Boolean(password),
+    });
   } catch (err) {
     return fail(err);
   }
