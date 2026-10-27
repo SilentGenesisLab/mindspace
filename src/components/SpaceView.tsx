@@ -363,6 +363,9 @@ export default function SpaceView({ slug }: { slug: string }) {
           <Link href={`/s/${slug}/list`} className="btn btn-sm hide-mobile">
             列表
           </Link>
+          <Link href={`/s/${slug}/board`} className="btn btn-sm">
+            表单
+          </Link>
           {space?.canManage && (
             <Link href={`/s/${slug}/admin`} className="btn btn-sm">
               后台

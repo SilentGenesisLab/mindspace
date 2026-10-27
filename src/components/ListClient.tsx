@@ -77,6 +77,9 @@ export default function ListClient({ slug, title }: { slug: string; title: strin
           <Link href={`/s/${slug}/tree`} className="btn btn-sm">
             问题树
           </Link>
+          <Link href={`/s/${slug}/board`} className="btn btn-sm">
+            表单
+          </Link>
         </div>
       </nav>
 

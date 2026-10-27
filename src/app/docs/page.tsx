@@ -53,6 +53,18 @@ node mindspace.mjs worker --agent claude-1 --exec "claude -p {prompt}"
 # 运维面板：在跑 / 停滞 / 待验收 / 树是否过期
 node mindspace.mjs ops --watch --interval 60`;
 
+const boardCmd = `# 表单：核心命题 → 分支/子模块 → 具体问题 + 验收标准
+curl -H "Authorization: Bearer $MINDSPACE_KEY" \\
+  $MINDSPACE_URL/api/spaces/:slug/board
+
+# 点「AI 执行」= 开一次新尝试：托管执行，跑完自动交给验收 Agent
+curl -X POST -H "Authorization: Bearer $MINDSPACE_KEY" -H 'Content-Type: application/json' \\
+  -d '{"itemIds":["<item id>"]}' $MINDSPACE_URL/api/spaces/:slug/board/run
+
+# 看这次尝试的结果、评分、每条验收标准是否满足
+curl -H "Authorization: Bearer $MINDSPACE_KEY" \\
+  $MINDSPACE_URL/api/spaces/:slug/board/items/:id`;
+
 const api = `GET    /api/spaces/:slug/graph
 GET    /api/spaces/:slug/nodes?q=&tag=&author=&domain=&type=
 POST   /api/spaces/:slug/nodes            { "content": "...", "kind": "question" }
@@ -69,6 +81,15 @@ POST   /api/spaces/:slug/tree/dispatch    { "mode": "gaps|missing|all|selected" 
 GET    /api/spaces/:slug/tree?format=md   # 导出问题树
 GET    /api/spaces/:slug/ops              # 运维快照
 POST   /api/spaces/:slug/audit
+GET    /api/spaces/:slug/board            # 表单：表头 + 分支 + 条目 + 每次尝试（?format=csv 导出）
+PUT    /api/spaces/:slug/board            { "need": "...", "proposition": "...", "principles": "...", "kpi": "..." }
+POST   /api/spaces/:slug/board/sections   { "title": "...", "parentId": null }
+POST   /api/spaces/:slug/board/items      { "sectionId": "...", "raw": "...", "acceptance": "..." }
+GET    /api/spaces/:slug/board/items/:id  # 条目 + 每次尝试的结果、评分、验收标准逐条判定、时间线
+POST   /api/spaces/:slug/board/items/:id/review   # 对最近一次待验收的尝试重跑验收 Agent
+POST   /api/spaces/:slug/board/run        { "itemIds": ["..."] }   # 开新一轮尝试：托管执行 → 自动验收
+POST   /api/spaces/:slug/board/rewrite    { "itemIds": ["..."] }   # AI 改写问题 / 补验收标准
+POST   /api/spaces/:slug/board/import     # 把最新问题树导成表单
 GET    /api/spaces/:slug/export?format=json|csv|md
 
 Authorization: Bearer ms_live_...`;
@@ -158,6 +179,18 @@ export default function DocsPage() {
           托管执行默认用 <code>RUN_MODEL</code>（默认 deepseek-v4.1-flash）。Anthropic 模型在部分区域会被
           OpenRouter 拒绝，需要本地 Claude Code / worker 或代理；代码、文件类任务也应该走本地 worker。
         </p>
+
+        <h2>8.5 表单视图</h2>
+        <p>
+          <code>/s/:slug/board</code> 是一张和表格习惯对齐的视图：表头写「核心需求 / 当前核心命题 / 提问和验收原则 /
+          核心 KPI」，下面按分支、子模块（最多三层）挂具体问题和验收标准。每一条都能点「AI 执行」——
+          这会开一次带 <code>board_item_id</code> 的新尝试，执行完自动交给验收 Agent，按验收标准逐条判定，
+          通过就落「已通过」，不通过就落「未通过」并写明缺什么；再点一次执行，上一轮的缺口会写进新 prompt。
+          第一/二/三次尝试、评分和理由都留在同一条任务反馈链路里，也能一键导出 CSV。
+        </p>
+        <pre>
+          <code>{boardCmd}</code>
+        </pre>
 
         <h2>9. 关系与审校</h2>
         <p>

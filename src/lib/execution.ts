@@ -123,6 +123,19 @@ ${child.kind === 'gap' ? '注意：这是当前问题集没有覆盖到的盲区
   return { created: created.length, tasks: created };
 }
 
+/** 验收标准可以是数组，也可以是一段按行/序号写的文本。 */
+export function acceptanceList(value: unknown): string[] {
+  const lines = Array.isArray(value)
+    ? value.map((v) => String(v))
+    : typeof value === 'string'
+      ? value.split(/\n+/)
+      : [];
+  return lines
+    .map((line) => line.replace(/^\s*(?:[-*•]|\d+[.、)）])\s*/, '').trim())
+    .filter((line) => line.length > 0)
+    .slice(0, 12);
+}
+
 type ExecContext = {
   title: string;
   prompt: string;
@@ -178,7 +191,7 @@ export async function runTaskHosted(opts: { spaceId: string; taskId: string; mod
         {
           role: 'system',
           content:
-            '你是思维空间里的执行 Agent。你收到的是一个具体问题，直接交付可执行结论：先给答案，再给依据，最后给下一步。不要复述问题，不要写"作为一个 AI"。中文输出，600 字以内。',
+            '你是思维空间里的执行 Agent。你收到的是一个具体问题，直接交付可执行结论：先给答案，再给依据，最后给下一步。不要复述问题，不要写"作为一个 AI"。中文输出，默认 600 字以内；任务若给了验收标准，以逐条满足验收标准为准。',
         },
         {
           role: 'user',
@@ -240,6 +253,8 @@ export async function autoReviewTask(opts: {
   spaceId: string;
   taskId: string;
   apply?: boolean;
+  /** 不通过时也落成"已退回"（表单流程里由验收 Agent 直接判定） */
+  applyReject?: boolean;
   threshold?: number;
   reviewer?: string;
 }) {
@@ -251,6 +266,7 @@ export async function autoReviewTask(opts: {
   const reviewer = opts.reviewer || 'reviewer';
   const model = REVIEW_MODEL();
   const started = Date.now();
+  const criteria = acceptanceList(ctx.context?.acceptance);
 
   const result = await chat(
     [
@@ -265,7 +281,14 @@ export async function autoReviewTask(opts: {
 任务：${ctx.title}
 任务要求：
 ${ctx.prompt}
-
+${
+  criteria.length
+    ? `
+验收标准（逐条判断，任何一条不满足都不能通过）：
+${criteria.map((c, i) => `${i + 1}. ${c}`).join('\n')}
+`
+    : ''
+}
 交付结果：
 ${ctx.result.slice(0, 8000)}
 
@@ -273,19 +296,36 @@ ${ctx.result.slice(0, 8000)}
 - score 0-100：90+ 可直接采用；70-89 基本可用但需补充；<70 不通过
 - decision: "approve" 或 "reject"
 - reasons: 2-3 条（为什么给这个分）
-- missing: 还缺什么（没有就给空数组）
+- missing: 还缺什么（没有就给空数组）${criteria.length ? '\n- checks: 每条验收标准一项 {"criterion":"原文","pass":true/false,"note":"一句话依据"}' : ''}
 
-输出：{"score":82,"decision":"approve","reasons":["..."],"missing":["..."]}`,
+输出：{"score":82,"decision":"approve","reasons":["..."],"missing":["..."]${criteria.length ? ',"checks":[{"criterion":"...","pass":true,"note":"..."}]' : ''}}`,
       },
     ],
-    { model, json: true, maxTokens: 1200, temperature: 0.1, timeoutMs: 90_000, title: 'Mindspace auto review' },
+    // 默认验收模型是推理模型：max_tokens 太小会被 reasoning 吃光，content 为空
+    { model, json: true, maxTokens: 3500, temperature: 0.1, timeoutMs: 90_000, title: 'Mindspace auto review' },
   );
 
-  const parsed = extractJson<{ score?: number; decision?: string; reasons?: unknown[]; missing?: unknown[] }>(result.text);
+  const parsed = extractJson<{
+    score?: number;
+    decision?: string;
+    reasons?: unknown[];
+    missing?: unknown[];
+    checks?: unknown[];
+  }>(result.text);
   if (!parsed) throw new LlmError('验收结果无法解析');
 
   const score = Math.max(0, Math.min(100, Math.round(Number(parsed.score) || 0)));
-  const decision = parsed.decision === 'approve' && score >= (opts.threshold ?? 70) ? 'approve' : 'reject';
+  const checks = (Array.isArray(parsed.checks) ? parsed.checks : [])
+    .filter((c): c is { criterion?: unknown; pass?: unknown; note?: unknown } => Boolean(c) && typeof c === 'object')
+    .slice(0, 12)
+    .map((c) => ({
+      criterion: String(c.criterion ?? '').slice(0, 300),
+      pass: c.pass === true,
+      note: String(c.note ?? '').slice(0, 300),
+    }));
+  const allChecksPass = checks.length === 0 || checks.every((c) => c.pass);
+  const decision =
+    parsed.decision === 'approve' && score >= (opts.threshold ?? 70) && allChecksPass ? 'approve' : 'reject';
   const reasons = (Array.isArray(parsed.reasons) ? parsed.reasons : [])
     .filter((r): r is string => typeof r === 'string')
     .slice(0, 4);
@@ -300,7 +340,7 @@ ${ctx.result.slice(0, 8000)}
       opts.taskId,
       `agent:${reviewer}`,
       `AI 预审 ${score} 分 · ${decision === 'approve' ? '建议通过' : '建议退回'}`,
-      JSON.stringify({ score, decision, reasons, missing, model: result.model, ms: Date.now() - started }),
+      JSON.stringify({ score, decision, reasons, missing, checks, model: result.model, ms: Date.now() - started }),
     ],
   );
 
@@ -321,10 +361,26 @@ ${ctx.result.slice(0, 8000)}
       ],
     );
     applied = true;
+  } else if (opts.applyReject && decision === 'reject') {
+    await q(
+      `update tasks set status = 'rejected', closed_at = now(), updated_at = now() where id = $1`,
+      [opts.taskId],
+    );
+    await q(
+      `insert into task_events (task_id, actor_type, actor_name, type, message, payload)
+       values ($1, 'agent', $2, 'review', $3, $4)`,
+      [
+        opts.taskId,
+        `agent:${reviewer}`,
+        `AI 验收未通过（${score} 分）${missing[0] ? `：${missing[0]}` : ''}`,
+        JSON.stringify({ decision: 'reject', score, auto: true, model: result.model }),
+      ],
+    );
+    applied = true;
   }
 
   publish(opts.spaceId, 'task.updated', { taskId: opts.taskId });
-  return { score, decision, reasons, missing, applied, model: result.model };
+  return { score, decision, reasons, missing, checks, applied, model: result.model };
 }
 
 /** 运维视图：谁在跑、什么卡住、树是否过期。 */

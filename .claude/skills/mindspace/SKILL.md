@@ -127,6 +127,8 @@ node mindspace.mjs worker --agent w1 --exec "claude -p {prompt}"
 | GET | `/api/spaces/:slug/tasks/:id` | 任务 + `events[]` 时间线 |
 | GET | `/api/spaces/:slug/stats` | 后台统计（需收集者） |
 | GET | `/api/spaces/:slug/stream` | SSE：`node.created` / `audit.completed` / `task.updated` / `graph.relayout`，需 Cookie |
+| GET | `/api/spaces/:slug/board` | 表单：`{header, sections, items, stats, canManage}`；`?format=csv` 直接下载 |
+| GET | `/api/spaces/:slug/board/items/:id` | 条目 + 每次尝试的结果、评分、逐条验收判定、时间线 |
 
 ### 写
 
@@ -145,6 +147,15 @@ node mindspace.mjs worker --agent w1 --exec "claude -p {prompt}"
 | DELETE | `/api/spaces/:slug/keys?id=` | 撤销 Key |
 | POST | `/api/spaces/:slug/invite` | 重置邀请码 → `{invite_code,url}` |
 | GET | `/api/spaces/:slug/export?format=` | `json` / `csv` / `md` |
+| PUT | `/api/spaces/:slug/board` | `{"need","proposition","principles","kpi"}` → 表头（需收集者/Key） |
+| POST | `/api/spaces/:slug/board/sections` | `{"title","description?","parentId?":null}` → `{section}`；最多三层 |
+| PATCH/DELETE | `/api/spaces/:slug/board/sections/:id` | `{"title?","description?","position?"}`；删除会连带条目 |
+| POST | `/api/spaces/:slug/board/items` | `{"sectionId","raw","acceptance?","urgency?":"P0\|P1\|P2","rewrite?","feedback?"}` → `{item}` |
+| PATCH/DELETE | `/api/spaces/:slug/board/items/:id` | 同字段；作者本人或收集者 |
+| POST | `/api/spaces/:slug/board/run` | `{"itemIds":["..."]}` → `{started,skipped}`；开新一轮尝试，队列并发 2，跑完自动验收 |
+| POST | `/api/spaces/:slug/board/items/:id/review` | 对最近一次 `submitted` 尝试跑验收 Agent（外部 Agent 交付后用） |
+| POST | `/api/spaces/:slug/board/rewrite` | `{"itemIds":["..."]}` → `{updated}`；写 rewrite，只补空的 acceptance |
+| POST | `/api/spaces/:slug/board/import` | 最新问题树 → 表单（分支去重、问题按原文去重） |
 
 ### 典型返回
 
@@ -248,6 +259,27 @@ node mindspace.mjs auto-review <taskId> --apply
 - 本地 Claude：`worker --exec "claude -p {prompt}"`（需要本机 `claude` 已登录）；worker 有 120s 心跳和 600s 超时（`--heartbeat/--timeout`）。
 - AI 验收给 `score / reasons / missing`，写一条 `review_suggestion`；`--apply` 且 ≥threshold 才落 `approved`。
 - 任务详情和完整时间线在 `GET /tasks/:id`；问题树页面点状态徽标可直接看结果并验收。
+
+### 6.5 表单视图（适合人类按表格推进）
+
+页面 `/s/:slug/board`：表头四栏（核心需求 / 当前核心命题 / 提问和验收原则 / 核心 KPI）→ 分支/子模块（最多三层）→ 条目（原生问题、AI 改写、紧急程度、验收标准、收集者反馈）。每条目最多显示三次尝试。
+
+```bash
+# 读整张表
+curl -H "Authorization: Bearer $MINDSPACE_KEY" $MINDSPACE_URL/api/spaces/:slug/board
+
+# 加一条带验收标准的问题，然后「AI 执行」
+curl -X POST -H "Authorization: Bearer $MINDSPACE_KEY" -H 'Content-Type: application/json' \
+  -d '{"sectionId":"<id>","raw":"...","acceptance":"给出可拍摄脚本\n包含画面和台词","urgency":"P1"}' \
+  $MINDSPACE_URL/api/spaces/:slug/board/items
+curl -X POST -H "Authorization: Bearer $MINDSPACE_KEY" -H 'Content-Type: application/json' \
+  -d '{"itemIds":["<item id>"]}' $MINDSPACE_URL/api/spaces/:slug/board/run
+```
+
+- 每次 `run` 都是一个新的 task，带 `board_item_id`，所以在 `tasks` / `ops` / 后台里同样可见。
+- 托管执行后自动验收：验收 Agent 逐条判定 acceptance，`score ≥ 70` 且全部通过才落 `approved`，否则落 `rejected` 并记录 `missing`；下一次执行的 prompt 会带上上一轮缺口。
+- 已通过的条目默认不再重复派；先 `PATCH` 改验收标准再 `run`，或删掉重建。
+- 只能对 `submitted` 的尝试重跑验收；执行中断（服务重启）的下次 `run` 会先把旧尝试标成「执行失败」。
 
 ### 7. 持续运维
 

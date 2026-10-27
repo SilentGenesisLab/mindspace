@@ -202,6 +202,9 @@ export default function TreeView({ slug }: { slug: string }) {
           <Link href={`/s/${slug}/list`} className="btn btn-sm">
             问题集
           </Link>
+          <Link href={`/s/${slug}/board`} className="btn btn-sm">
+            表单
+          </Link>
           {canManage && (
             <Link href={`/s/${slug}/admin`} className="btn btn-sm">
               后台

@@ -19,6 +19,7 @@ export type Task = {
   context: Record<string, unknown>;
   started_at: string | null;
   executor: string | null;
+  board_item_id: string | null;
   created_at: string;
   updated_at: string;
   closed_at: string | null;
@@ -78,12 +79,13 @@ export async function createTask(opts: {
   treeId?: string | null;
   treeItemId?: string | null;
   context?: Record<string, unknown>;
+  boardItemId?: string | null;
 }) {
   const title = opts.title.trim().slice(0, 200);
   if (title.length < 2) throw new Error('任务标题太短');
   const task = await one<Task>(
-    `insert into tasks (space_id, node_id, title, prompt, priority, created_by, assignee, status, tree_id, tree_item_id, context)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) returning *`,
+    `insert into tasks (space_id, node_id, title, prompt, priority, created_by, assignee, status, tree_id, tree_item_id, context, board_item_id)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) returning *`,
     [
       opts.spaceId,
       opts.nodeId || null,
@@ -96,6 +98,7 @@ export async function createTask(opts: {
       opts.treeId || null,
       opts.treeItemId || null,
       JSON.stringify(opts.context ?? {}),
+      opts.boardItemId || null,
     ],
   );
   if (!task) throw new Error('创建任务失败');

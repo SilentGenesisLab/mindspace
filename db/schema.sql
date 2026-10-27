@@ -173,3 +173,39 @@ create index if not exists tasks_tree_idx on tasks (space_id, tree_id, tree_item
 
 alter table users add column if not exists password_hash text;
 alter table users add column if not exists password_set_at timestamptz;
+
+-- 表单视图：核心命题 / 需求 / 原则 / KPI 挂在空间上，分支可嵌套，条目带验收标准。
+alter table spaces add column if not exists board jsonb not null default '{}'::jsonb;
+
+create table if not exists board_sections (
+  id uuid primary key default gen_random_uuid(),
+  space_id uuid not null references spaces(id) on delete cascade,
+  parent_id uuid references board_sections(id) on delete cascade,
+  title text not null,
+  description text not null default '',
+  position double precision not null default 0,
+  created_by uuid references users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists board_sections_space_idx on board_sections (space_id, parent_id, position);
+
+create table if not exists board_items (
+  id uuid primary key default gen_random_uuid(),
+  space_id uuid not null references spaces(id) on delete cascade,
+  section_id uuid not null references board_sections(id) on delete cascade,
+  raw text not null,
+  rewrite text not null default '',
+  urgency text not null default 'P1',
+  acceptance text not null default '',
+  feedback text not null default '',
+  position double precision not null default 0,
+  node_id uuid references nodes(id) on delete set null,
+  created_by uuid references users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists board_items_section_idx on board_items (space_id, section_id, position);
+
+alter table tasks add column if not exists board_item_id uuid references board_items(id) on delete set null;
+create index if not exists tasks_board_item_idx on tasks (board_item_id, created_at);
